@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  rust:
+    name: Rust (fmt / clippy / test / build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Release build (split binaries)
+        run: cargo build -p danmo-server --bins --release
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: danmo-bins-${{ github.sha }}
+          path: |
+            target/release/danmo-relay
+            target/release/danmo-admin
+            target/release/danmo-user
+            target/release/danmo-router
+          if-no-files-found: error
+
+  portals:
+    name: Portals (admin / user)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        app: [admin, user]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/${{ matrix.app }}/package-lock.json
+
+      - name: Install & build
+        working-directory: apps/${{ matrix.app }}
+        run: |
+          npm ci
+          npm run build
+
+      - name: Upload portal dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: portal-${{ matrix.app }}-${{ github.sha }}
+          path: apps/${{ matrix.app }}/dist
+          if-no-files-found: error
