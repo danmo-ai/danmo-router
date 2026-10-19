@@ -9,6 +9,32 @@ use std::collections::HashMap;
 
 const DEFAULT_MAX_TOKENS: i64 = 8192;
 
+/// Request fields the Messages codec reads.
+pub const REQUEST_KEYS: &[&str] = &[
+    "model",
+    "system",
+    "messages",
+    "max_tokens",
+    "temperature",
+    "top_p",
+    "stop_sequences",
+    "stream",
+    "thinking",
+    "tools",
+    "tool_choice",
+];
+
+const RESPONSE_KEYS: &[&str] = &[
+    "id",
+    "type",
+    "role",
+    "model",
+    "content",
+    "stop_reason",
+    "stop_sequence",
+    "usage",
+];
+
 pub fn decode_request(body: &Value) -> Result<Request, String> {
     let mut req = Request {
         max_tokens: body.get("max_tokens").and_then(Value::as_i64),
@@ -32,14 +58,21 @@ pub fn decode_request(body: &Value) -> Result<Request, String> {
                 .collect()
         })
         .unwrap_or_default();
-    if let Some(t) = body.get("thinking") {
-        if t.get("type").and_then(Value::as_str) == Some("enabled") {
-            req.reasoning = Some(Reasoning {
-                effort: None,
-                budget_tokens: t.get("budget_tokens").and_then(Value::as_i64),
-            });
-        }
-    }
+    req.reasoning = match body.pointer("/thinking/type").and_then(Value::as_str) {
+        Some("enabled") => Some(Reasoning {
+            enabled: Some(true),
+            budget_tokens: body
+                .pointer("/thinking/budget_tokens")
+                .and_then(Value::as_i64),
+            ..Reasoning::default()
+        }),
+        Some("adaptive") => Some(Reasoning {
+            enabled: Some(true),
+            ..Reasoning::default()
+        }),
+        Some("disabled") => Some(Reasoning::off()),
+        _ => None,
+    };
 
     let messages = body
         .get("messages")
@@ -213,7 +246,13 @@ pub fn encode_request(req: &Request, model: &str) -> Value {
     let mut max_tokens = req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
     let mut out = Map::new();
     out.insert("model".into(), json!(model));
-    if let Some(r) = &req.reasoning {
+    if req.reasoning.as_ref().is_some_and(Reasoning::is_off) {
+        out.insert("thinking".into(), json!({"type": "disabled"}));
+    } else if let Some(r) = req
+        .reasoning
+        .as_ref()
+        .filter(|r| r.is_on() || r.has_level())
+    {
         let budget = r.budget().max(1024);
         if max_tokens <= budget {
             max_tokens = budget + DEFAULT_MAX_TOKENS;
@@ -295,6 +334,8 @@ pub fn decode_response(body: &Value) -> Result<Response, String> {
         id: str_field(body, "id").unwrap_or_else(|| gen_id("msg_")),
         parts: blocks.iter().filter_map(block_to_part).collect(),
         stop: stop_from(body.get("stop_reason").and_then(Value::as_str)),
+        extra: unknown_fields(body, RESPONSE_KEYS),
+        message_extra: Map::new(),
     })
 }
 
@@ -308,10 +349,12 @@ pub fn encode_response(
         .parts
         .iter()
         .filter_map(|p| match p {
-            Part::Reasoning { text, signature } => Some(json!({
-                "type": "thinking", "thinking": text,
-                "signature": signature.clone().unwrap_or_default()
-            })),
+            Part::Reasoning { text, signature } if !text.is_empty() || signature.is_some() => {
+                Some(json!({
+                    "type": "thinking", "thinking": text,
+                    "signature": signature.clone().unwrap_or_default()
+                }))
+            }
             Part::Text(t) => Some(json!({"type": "text", "text": t})),
             Part::ToolCall {
                 id,

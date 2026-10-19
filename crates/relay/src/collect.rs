@@ -1,6 +1,7 @@
 //! Reads the raw usage object out of upstream responses, per upstream protocol. Never modifies
 //! anything; field-set matching happens afterwards in `danmo_core::usage`.
 
+use crate::dialect::DialectCodec;
 use danmo_core::protocol::Protocol;
 use serde_json::{Map, Value};
 
@@ -19,38 +20,26 @@ pub fn from_body(protocol: Protocol, body: &Value) -> Option<Value> {
     }
 }
 
-/// Vendors that report failures inside an HTTP 200 body (e.g. MiniMax `base_resp`).
-pub fn soft_error(body: &Value) -> Option<String> {
-    let base = body.get("base_resp")?;
-    let code = base.get("status_code").and_then(Value::as_i64)?;
-    if code == 0 {
-        return None;
-    }
-    let msg = base
-        .get("status_msg")
-        .and_then(Value::as_str)
-        .unwrap_or("upstream error");
-    Some(format!("upstream error {code}: {msg}"))
-}
-
-/// Accumulates usage across stream events.
+/// Accumulates usage across stream events of one upstream dialect.
 pub struct UsageCollector {
     protocol: Protocol,
+    dialect: &'static dyn DialectCodec,
     usage: Option<Value>,
     pub soft_error: Option<String>,
 }
 
 impl UsageCollector {
-    pub fn new(protocol: Protocol) -> Self {
+    pub fn new(dialect: &'static dyn DialectCodec) -> Self {
         Self {
-            protocol,
+            protocol: dialect.spec().protocol,
+            dialect,
             usage: None,
             soft_error: None,
         }
     }
 
     pub fn observe(&mut self, kind: Option<&str>, json: &Value) {
-        if let Some(err) = soft_error(json) {
+        if let Some(err) = self.dialect.soft_error(json) {
             self.soft_error = Some(err);
         }
         match self.protocol {
@@ -115,11 +104,13 @@ impl UsageCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dialect;
+    use danmo_core::dialect::{find, standard};
     use serde_json::json;
 
     #[test]
     fn messages_merges_start_and_last_delta() {
-        let mut c = UsageCollector::new(Protocol::AnthropicMessages);
+        let mut c = UsageCollector::new(dialect::codec(standard(Protocol::AnthropicMessages)));
         c.observe(
             Some("message_start"),
             &json!({"message": {"usage": {"input_tokens": 10, "cache_read_input_tokens": 90, "output_tokens": 1}}}),
@@ -139,10 +130,15 @@ mod tests {
     }
 
     #[test]
-    fn minimax_soft_error_is_detected() {
+    fn soft_errors_only_for_dialects_that_report_them() {
         let body =
             json!({"base_resp": {"status_code": 1008, "status_msg": "insufficient balance"}});
-        assert!(soft_error(&body).unwrap().contains("1008"));
-        assert!(soft_error(&json!({"base_resp": {"status_code": 0}})).is_none());
+        let chat = |name| dialect::codec(find(Protocol::OpenaiChat, name).unwrap());
+        assert!(chat("minimax").soft_error(&body).unwrap().contains("1008"));
+        assert!(chat("opaque").soft_error(&body).is_some());
+        assert!(chat("standard").soft_error(&body).is_none());
+        assert!(chat("minimax")
+            .soft_error(&json!({"base_resp": {"status_code": 0}}))
+            .is_none());
     }
 }

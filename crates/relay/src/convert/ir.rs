@@ -1,5 +1,6 @@
-//! Intermediate representation shared by all conversational protocols. It only keeps the
-//! semantics every protocol has; anything else is dropped when converting.
+//! Intermediate representation shared by all conversational protocols. Semantics several
+//! dialects share and need to map get a slot; everything else rides in `extra`, which is kept
+//! when converting between dialects of one protocol and dropped across protocols.
 
 use serde_json::{json, Map, Value};
 
@@ -15,6 +16,8 @@ pub struct Request {
     pub stop: Vec<String>,
     pub stream: bool,
     pub reasoning: Option<Reasoning>,
+    /// Top-level fields the source dialect does not define.
+    pub extra: Map<String, Value>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,6 +30,8 @@ pub enum Role {
 pub struct Message {
     pub role: Role,
     pub parts: Vec<Part>,
+    /// Message fields the source codec does not define, e.g. Chat `name` or `prefix`.
+    pub extra: Map<String, Value>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -70,11 +75,33 @@ pub enum ToolChoice {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Reasoning {
+    /// `Some(false)` turns thinking off; `None` leaves it to the upstream default.
+    pub enabled: Option<bool>,
     pub effort: Option<String>,
     pub budget_tokens: Option<i64>,
 }
 
 impl Reasoning {
+    pub fn off() -> Self {
+        Self {
+            enabled: Some(false),
+            ..Self::default()
+        }
+    }
+
+    pub fn is_off(&self) -> bool {
+        self.enabled == Some(false)
+    }
+
+    pub fn is_on(&self) -> bool {
+        self.enabled == Some(true)
+    }
+
+    /// Whether the request asked for a specific amount of thinking.
+    pub fn has_level(&self) -> bool {
+        self.effort.is_some() || self.budget_tokens.is_some()
+    }
+
     pub fn effort(&self) -> String {
         self.effort
             .clone()
@@ -109,6 +136,9 @@ pub struct Response {
     pub id: String,
     pub parts: Vec<Part>,
     pub stop: StopReason,
+    /// Top-level and message-level fields the source codec does not define.
+    pub extra: Map<String, Value>,
+    pub message_extra: Map<String, Value>,
 }
 
 impl Response {
@@ -214,12 +244,44 @@ pub fn data_url(mime: &str, data: &str) -> String {
 /// Append to the last message when it has the same role; protocols that require alternating
 /// roles get merged turns for free.
 pub fn push_parts(messages: &mut Vec<Message>, role: Role, parts: Vec<Part>) {
+    push_parts_with(messages, role, parts, Map::new());
+}
+
+pub fn push_parts_with(
+    messages: &mut Vec<Message>,
+    role: Role,
+    parts: Vec<Part>,
+    extra: Map<String, Value>,
+) {
     if parts.is_empty() {
         return;
     }
     match messages.last_mut() {
-        Some(last) if last.role == role => last.parts.extend(parts),
-        _ => messages.push(Message { role, parts }),
+        Some(last) if last.role == role => {
+            last.parts.extend(parts);
+            for (k, v) in extra {
+                last.extra.entry(k).or_insert(v);
+            }
+        }
+        _ => messages.push(Message { role, parts, extra }),
+    }
+}
+
+/// Fields of `obj` outside `known`.
+pub fn unknown_fields(obj: &Value, known: &[&str]) -> Map<String, Value> {
+    obj.as_object()
+        .map(|m| {
+            m.iter()
+                .filter(|(k, _)| !known.contains(&k.as_str()))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub fn insert_missing(out: &mut Map<String, Value>, extra: &Map<String, Value>) {
+    for (k, v) in extra {
+        out.entry(k.clone()).or_insert_with(|| v.clone());
     }
 }
 

@@ -2,8 +2,41 @@ use super::ir::{Event, Part, Role, StopReason};
 use super::*;
 use crate::collect;
 use crate::sse::SseParser;
-use danmo_core::usage::default_adapter;
 use serde_json::json;
+
+fn std_codec(p: Protocol) -> &'static dyn DialectCodec {
+    crate::dialect::codec(danmo_core::dialect::standard(p))
+}
+
+/// Conversions between the standard dialects of two protocols.
+fn request(
+    from: Protocol,
+    to: Protocol,
+    body: &Value,
+    model: &str,
+    stream: bool,
+) -> Result<Value, String> {
+    super::request(std_codec(from), std_codec(to), body, model, stream)
+}
+
+fn response(
+    from: Protocol,
+    to: Protocol,
+    body: &Value,
+    usage: &Usage,
+    model: &str,
+) -> Result<Value, String> {
+    super::response(std_codec(from), std_codec(to), body, usage, model)
+}
+
+fn stream_converter(from: Protocol, to: Protocol, include_usage: bool) -> StreamConverter {
+    StreamConverter::new(
+        std_codec(from),
+        std_codec(to),
+        "client".into(),
+        include_usage,
+    )
+}
 
 const CHAT_PROTOCOLS: [Protocol; 4] = [
     Protocol::OpenaiChat,
@@ -376,7 +409,6 @@ fn responses_convert_in_all_twelve_directions_with_usage() {
                 to,
                 &sample_response(from),
                 &sample_usage(),
-                default_adapter(to),
                 "client-model",
             )
             .unwrap();
@@ -491,7 +523,7 @@ data: {"type":"message_stop"}"#,
 
 /// Run `stream` (in protocol `from`) through a converter to `to`, then decode the output.
 fn convert_stream(from: Protocol, to: Protocol) -> (Vec<Event>, Option<Usage>, String) {
-    let mut conv = StreamConverter::new(from, to, default_adapter(to), "client".into(), true);
+    let mut conv = stream_converter(from, to, true);
     let mut parser = SseParser::default();
     let mut out = Vec::new();
     // Split into small chunks to exercise buffering.
@@ -508,7 +540,7 @@ fn convert_stream(from: Protocol, to: Protocol) -> (Vec<Event>, Option<Usage>, S
         .collect();
 
     let mut decoder = Decoder::new(to);
-    let mut collector = UsageCollector::new(to);
+    let mut collector = UsageCollector::new(std_codec(to));
     let mut events = Vec::new();
     let mut parser = SseParser::default();
     for ev in parser.push(text.as_bytes()) {
@@ -579,13 +611,7 @@ fn streams_convert_in_all_twelve_directions_with_usage() {
 
 #[test]
 fn chat_encoder_omits_usage_chunk_unless_requested() {
-    let mut conv = StreamConverter::new(
-        Protocol::AnthropicMessages,
-        Protocol::OpenaiChat,
-        default_adapter(Protocol::OpenaiChat),
-        "m".into(),
-        false,
-    );
+    let mut conv = stream_converter(Protocol::AnthropicMessages, Protocol::OpenaiChat, false);
     let mut parser = SseParser::default();
     let mut out = Vec::new();
     for ev in parser.push(sample_stream(Protocol::AnthropicMessages).as_bytes()) {
