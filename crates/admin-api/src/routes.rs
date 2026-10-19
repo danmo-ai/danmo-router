@@ -8,6 +8,7 @@ use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use axum_extra::extract::cookie::{Cookie, SameSite};
 use danmo_core::billing;
+use danmo_core::dialect;
 use danmo_core::protocol::{AuthStyle, Protocol, RelayMode};
 use danmo_core::services::{channel, log as log_svc, session, user as user_svc};
 use danmo_core::usage;
@@ -123,6 +124,7 @@ async fn meta(_admin: AdminUser) -> ApiResult<Json<Value>> {
                 AuthStyle::XGoogApiKey.as_str(),
             ],
             "usage_adapters": usage_adapters,
+            "dialects": dialect::DIALECTS,
         }
     })))
 }
@@ -131,7 +133,7 @@ async fn list_channels(
     State(state): State<AdminState>,
     _admin: AdminUser,
 ) -> ApiResult<Json<Value>> {
-    let channels = channel::list_channels(&state.pool).await?;
+    let channels = channel::list_views(&state.pool).await?;
     Ok(Json(json!({ "success": true, "data": channels })))
 }
 
@@ -143,7 +145,8 @@ struct ChannelBody {
     #[serde(default)]
     key: String,
     base_url: String,
-    models: String,
+    #[serde(default)]
+    models: ModelsBody,
     #[serde(default = "default_group")]
     group_name: String,
     #[serde(default)]
@@ -158,10 +161,35 @@ struct ChannelBody {
     upstream_protocol: String,
     #[serde(default = "default_auth_style")]
     auth_style: String,
-    #[serde(default)]
-    model_mapping: String,
     #[serde(default = "default_true")]
     inject_stream_usage: bool,
+    #[serde(default)]
+    default_dialect: String,
+    #[serde(default)]
+    vendor: String,
+}
+
+/// Model rows, or a comma-separated list of names taking the channel's default dialect.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ModelsBody {
+    Csv(String),
+    Rows(Vec<channel::ChannelModelInput>),
+}
+
+impl Default for ModelsBody {
+    fn default() -> Self {
+        ModelsBody::Rows(Vec::new())
+    }
+}
+
+impl ModelsBody {
+    fn into_rows(self) -> Vec<channel::ChannelModelInput> {
+        match self {
+            ModelsBody::Csv(s) => channel::ChannelModelInput::list(&s),
+            ModelsBody::Rows(rows) => rows,
+        }
+    }
 }
 
 impl ChannelBody {
@@ -171,7 +199,7 @@ impl ChannelBody {
             type_: self.type_,
             key: self.key,
             base_url: self.base_url,
-            models: self.models,
+            models: self.models.into_rows(),
             group_name: self.group_name,
             priority: self.priority,
             weight: self.weight,
@@ -179,8 +207,9 @@ impl ChannelBody {
             relay_mode: self.relay_mode,
             upstream_protocol: self.upstream_protocol,
             auth_style: self.auth_style,
-            model_mapping: self.model_mapping,
             inject_stream_usage: self.inject_stream_usage,
+            default_dialect: self.default_dialect,
+            vendor: self.vendor,
         }
     }
 }
@@ -220,7 +249,8 @@ async fn create_channel(
     }
     let ch = channel::create_channel(&state.pool, &state.config.encryption_key, body.into_input())
         .await?;
-    Ok(Json(json!({ "success": true, "data": ch })))
+    let view = channel::get_view(&state.pool, ch.id).await?;
+    Ok(Json(json!({ "success": true, "data": view })))
 }
 
 async fn update_channel(
@@ -236,7 +266,8 @@ async fn update_channel(
         body.into_input(),
     )
     .await?;
-    Ok(Json(json!({ "success": true, "data": ch })))
+    let view = channel::get_view(&state.pool, ch.id).await?;
+    Ok(Json(json!({ "success": true, "data": view })))
 }
 
 #[derive(Deserialize)]
@@ -367,8 +398,9 @@ struct ModelPriceBody {
     tiers: String,
     #[serde(default)]
     periods: String,
+    /// A JSON object from protocol to dialect, or that object serialized as a string.
     #[serde(default)]
-    native_usage: String,
+    native_dialects: Value,
 }
 
 fn default_one() -> f64 {
@@ -389,7 +421,11 @@ async fn upsert_model_price(
         search_price: body.search_price,
         tiers: body.tiers,
         periods: body.periods,
-        native_usage: body.native_usage,
+        native_dialects: match body.native_dialects {
+            Value::Null => String::new(),
+            Value::String(s) => s,
+            other => other.to_string(),
+        },
     };
     let price = billing::upsert_model_price(&state.pool, &input).await?;
     Ok(Json(json!({ "success": true, "data": price })))
