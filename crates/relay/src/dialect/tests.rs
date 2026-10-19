@@ -255,6 +255,202 @@ fn usage() -> Usage {
     }
 }
 
+fn chat_turn(extra: Value) -> Value {
+    let mut body = json!({
+        "model": "m",
+        "max_tokens": 64,
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "a", "reasoning_content": "plan"},
+            {"role": "user", "content": "go"}
+        ]
+    });
+    body.as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
+    body
+}
+
+#[test]
+fn reasoning_switch_converts_across_protocols() {
+    let on = chat_turn(json!({"thinking": {"type": "enabled"}, "reasoning_effort": "high"}));
+
+    let msgs = conv(
+        (CHAT, "thinking"),
+        (AnthropicMessages, "standard"),
+        on.clone(),
+    );
+    assert_eq!(msgs["thinking"]["type"], "enabled");
+    assert_eq!(msgs["thinking"]["budget_tokens"], 24576);
+    assert!(msgs["max_tokens"].as_i64().unwrap() > 24576);
+    assert!(msgs.get("reasoning_effort").is_none());
+    assert!(msgs.get("thinking").unwrap().get("keep").is_none());
+    // Unsigned chat reasoning cannot be replayed as an Anthropic thinking block.
+    assert_eq!(
+        msgs["messages"][1]["content"],
+        json!([{"type": "text", "text": "a"}])
+    );
+
+    let gemini = conv((CHAT, "thinking"), (Gemini, "standard"), on.clone());
+    assert_eq!(
+        gemini["generationConfig"]["thinkingConfig"],
+        json!({"thinkingBudget": 24576, "includeThoughts": true})
+    );
+    assert_eq!(
+        gemini["contents"][1]["parts"][0],
+        json!({"text": "plan", "thought": true})
+    );
+
+    let responses = conv(
+        (CHAT, "enable_thinking"),
+        (OpenaiResponses, "thinking"),
+        chat(json!({"enable_thinking": true, "thinking_budget": 4096})),
+    );
+    assert_eq!(responses["thinking"], json!({"type": "enabled"}));
+    assert_eq!(responses["reasoning"]["effort"], "low");
+
+    let off = chat_turn(json!({"thinking": {"type": "disabled"}}));
+    let msgs_off = conv(
+        (CHAT, "thinking"),
+        (AnthropicMessages, "standard"),
+        off.clone(),
+    );
+    assert_eq!(msgs_off["thinking"], json!({"type": "disabled"}));
+    let gemini_off = conv((CHAT, "thinking"), (Gemini, "standard"), off);
+    assert_eq!(
+        gemini_off["generationConfig"]["thinkingConfig"],
+        json!({"thinkingBudget": 0})
+    );
+}
+
+#[test]
+fn each_protocol_reads_its_reasoning_into_the_target_dialect() {
+    let ark = json!({"model": "m", "input": "hi", "thinking": {"type": "disabled"},
+        "reasoning": {"effort": "high"}});
+    let chat_off = conv((OpenaiResponses, "thinking"), (CHAT, "standard"), ark);
+    assert_eq!(chat_off["reasoning_effort"], "none");
+    assert!(chat_off.get("thinking").is_none());
+
+    let gemini = json!({
+        "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+        "generationConfig": {"thinkingConfig": {"thinkingLevel": "HIGH"}}
+    });
+    let qf = conv((Gemini, "standard"), (CHAT, "qianfan"), gemini);
+    assert_eq!(qf["thinking"], json!({"type": "enabled"}));
+    assert_eq!(qf["thinking_budget"], 24576);
+    assert!(qf.get("reasoning_effort").is_none());
+
+    let mm = json!({
+        "model": "m", "max_tokens": 100,
+        "messages": [{"role": "user", "content": "hi"}],
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": "high"}
+    });
+    let minimax = conv((AnthropicMessages, "effort"), (CHAT, "minimax"), mm);
+    assert_eq!(minimax["thinking"], json!({"type": "adaptive"}));
+    assert_eq!(minimax["reasoning_effort"], "high");
+    assert_eq!(minimax["reasoning_split"], true);
+    assert!(minimax.get("output_config").is_none());
+}
+
+#[test]
+fn dialect_only_fields_do_not_cross_protocols() {
+    let body = chat(json!({
+        "thinking": {"type": "enabled"},
+        "web_search": {"enable": true},
+        "enable_enhancement": true,
+        "zz_client": 7
+    }));
+    let msgs = conv((CHAT, "qianfan"), (AnthropicMessages, "effort"), body);
+    assert!(msgs.get("web_search").is_none());
+    assert!(msgs.get("enable_enhancement").is_none());
+    assert!(msgs.get("zz_client").is_none());
+    assert_eq!(msgs["thinking"]["type"], "adaptive");
+}
+
+#[test]
+fn response_reasoning_converts_across_protocols() {
+    let chat_resp = json!({
+        "id": "c", "model": "m",
+        "choices": [{"index": 0, "finish_reason": "stop", "message": {
+            "role": "assistant", "content": "ok", "reasoning_content": "hmm"
+        }}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+    });
+    let gemini = convert::response(
+        c(CHAT, "thinking"),
+        c(Gemini, "standard"),
+        &chat_resp,
+        &usage(),
+        "m",
+    )
+    .unwrap();
+    assert_eq!(
+        gemini["candidates"][0]["content"]["parts"],
+        json!([{"text": "hmm", "thought": true}, {"text": "ok"}])
+    );
+    assert_eq!(gemini["usageMetadata"]["promptTokenCount"], 10);
+    assert_eq!(gemini["usageMetadata"]["candidatesTokenCount"], 5);
+
+    let msgs = json!({
+        "id": "m1", "type": "message", "role": "assistant", "model": "m",
+        "content": [
+            {"type": "thinking", "thinking": "hmm", "signature": "sig"},
+            {"type": "text", "text": "ok"}
+        ],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 5}
+    });
+    let back = convert::response(
+        c(AnthropicMessages, "standard"),
+        c(CHAT, "thinking"),
+        &msgs,
+        &usage(),
+        "m",
+    )
+    .unwrap();
+    assert_eq!(back["choices"][0]["message"]["reasoning_content"], "hmm");
+    assert_eq!(back["choices"][0]["message"]["content"], "ok");
+    assert_eq!(back["usage"]["prompt_cache_hit_tokens"], 0);
+    assert_eq!(back["usage"]["prompt_cache_miss_tokens"], 10);
+}
+
+#[test]
+fn converted_stream_renders_usage_in_the_client_dialect() {
+    use crate::sse::SseParser;
+
+    let mut conv = convert::StreamConverter::new(
+        c(AnthropicMessages, "standard"),
+        c(CHAT, "thinking"),
+        "client".into(),
+        true,
+    );
+    let raw = "\
+event: message_start\n\
+data: {\"type\":\"message_start\",\"message\":{\"id\":\"m1\",\"usage\":{\"input_tokens\":60,\"cache_read_input_tokens\":40,\"output_tokens\":1}}}\n\n\
+event: content_block_delta\n\
+data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"hmm\"}}\n\n\
+event: content_block_delta\n\
+data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n\
+event: message_delta\n\
+data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}\n\n";
+    let mut parser = SseParser::default();
+    let mut out = Vec::new();
+    for ev in parser.push(raw.as_bytes()) {
+        let json = ev.json();
+        out.extend(conv.event(&ev, json.as_ref()));
+    }
+    out.extend(conv.finish());
+    let text: String = out
+        .iter()
+        .map(|b| String::from_utf8_lossy(b).into_owned())
+        .collect();
+    assert!(text.contains("\"reasoning_content\":\"hmm\""), "{text}");
+    assert!(text.contains("\"content\":\"ok\""), "{text}");
+    assert!(text.contains("\"prompt_cache_hit_tokens\":40"), "{text}");
+    assert!(text.contains("\"prompt_cache_miss_tokens\":60"), "{text}");
+}
+
 #[test]
 fn responses_keep_extras_and_read_reasoning_details() {
     let mm = json!({
