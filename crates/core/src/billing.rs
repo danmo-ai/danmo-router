@@ -1,7 +1,8 @@
 use crate::db::DbPool;
+use crate::dialect::NativeDialects;
 use crate::error::{AppError, AppResult};
 use crate::models::{GroupRatio, ModelPrice, Token, User};
-use crate::usage::{self, Usage};
+use crate::usage::Usage;
 use chrono::{NaiveTime, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::QueryBuilder;
@@ -14,8 +15,8 @@ pub struct BillingSession {
     pub model: String,
     pub pre_consumed: i64,
     pub token_unlimited: bool,
-    /// Usage adapter of the model's original vendor; responses are rendered in this field set.
-    pub native_usage: Option<String>,
+    /// The model's native dialect per protocol; clients are answered in it.
+    pub native_dialects: NativeDialects,
 }
 
 /// Input-length tier. The first tier whose `max_input` is absent or >= total input applies;
@@ -178,10 +179,10 @@ pub async fn pre_consume(
 ) -> AppResult<BillingSession> {
     let price = load_price(pool, model).await?;
     let model_ratio = price.as_ref().map_or(1.0, |p| p.model_ratio);
-    let native_usage = price
+    let native_dialects = price
         .as_ref()
-        .map(|p| p.native_usage.trim().to_string())
-        .filter(|s| !s.is_empty());
+        .map(|p| NativeDialects::load(&p.native_dialects))
+        .unwrap_or_default();
     let group_ratio = load_group_ratio(pool, group_name).await?;
     let amount = estimate_pre_consume(max_tokens, model_ratio, group_ratio);
 
@@ -234,7 +235,7 @@ pub async fn pre_consume(
         model: model.to_string(),
         pre_consumed: amount,
         token_unlimited: fresh_token.is_unlimited(),
-        native_usage,
+        native_dialects,
     })
 }
 
@@ -310,7 +311,8 @@ pub struct ModelPriceInput {
     pub search_price: f64,
     pub tiers: String,
     pub periods: String,
-    pub native_usage: String,
+    /// JSON object from protocol to dialect name, e.g. `{"openai_chat":"thinking"}`.
+    pub native_dialects: String,
 }
 
 impl ModelPriceInput {
@@ -324,7 +326,7 @@ impl ModelPriceInput {
             search_price: 0.0,
             tiers: String::new(),
             periods: String::new(),
-            native_usage: String::new(),
+            native_dialects: String::new(),
         }
     }
 
@@ -354,12 +356,7 @@ impl ModelPriceInput {
                 "period start/end must be HH:MM".into(),
             ));
         }
-        let native = self.native_usage.trim();
-        if !native.is_empty() && usage::adapter(native).is_none() {
-            return Err(AppError::BadRequest(format!(
-                "unknown native_usage '{native}'"
-            )));
-        }
+        NativeDialects::parse(&self.native_dialects)?;
         Ok(())
     }
 }
@@ -370,7 +367,7 @@ pub async fn upsert_model_price(pool: &DbPool, input: &ModelPriceInput) -> AppRe
         r#"
         INSERT INTO model_prices
             (model, model_ratio, completion_ratio, cache_read_ratio, cache_write_ratio,
-             search_price, tiers, periods, native_usage, updated_at)
+             search_price, tiers, periods, native_dialects, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
         ON CONFLICT(model) DO UPDATE SET
             model_ratio = excluded.model_ratio,
@@ -380,7 +377,7 @@ pub async fn upsert_model_price(pool: &DbPool, input: &ModelPriceInput) -> AppRe
             search_price = excluded.search_price,
             tiers = excluded.tiers,
             periods = excluded.periods,
-            native_usage = excluded.native_usage,
+            native_dialects = excluded.native_dialects,
             updated_at = datetime('now')
         "#,
     )
@@ -392,7 +389,7 @@ pub async fn upsert_model_price(pool: &DbPool, input: &ModelPriceInput) -> AppRe
     .bind(input.search_price)
     .bind(input.tiers.trim())
     .bind(input.periods.trim())
-    .bind(input.native_usage.trim())
+    .bind(NativeDialects::parse(&input.native_dialects)?.to_json())
     .execute(pool)
     .await?;
 
