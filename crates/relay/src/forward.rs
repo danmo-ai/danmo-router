@@ -127,6 +127,8 @@ struct Ctx {
     render: &'static dyn UsageAdapter,
     /// Passthrough only: rewrite usage when the upstream used a different field set.
     native: Option<&'static dyn UsageAdapter>,
+    /// Chat clients only receive a usage chunk when they asked for it.
+    client_wants_usage: bool,
 }
 
 pub async fn handle(state: &RelayState, inbound: Inbound) -> RelayResult<Response> {
@@ -259,6 +261,8 @@ pub async fn handle(state: &RelayState, inbound: Inbound) -> RelayResult<Respons
             strip_injected_usage,
             render: native.unwrap_or_else(|| usage::default_adapter(inbound.protocol)),
             native,
+            client_wants_usage: parsed.json.pointer("/stream_options/include_usage")
+                == Some(&Value::Bool(true)),
         };
 
         if !status.is_success() {
@@ -558,6 +562,7 @@ fn stream_response(ctx: Ctx, response: reqwest::Response) -> Response {
                 ctx.inbound,
                 ctx.render,
                 ctx.billing.model.clone(),
+                ctx.client_wants_usage,
             ))),
         ),
     };
