@@ -20,11 +20,20 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return json.data as T
 }
 
+export type Dialect = {
+  protocol: string
+  name: string
+  label: string
+  opaque: boolean
+  usage: string[]
+}
+
 export type Meta = {
   protocols: string[]
   relay_modes: string[]
   auth_styles: string[]
   usage_adapters: { name: string; protocol: string }[]
+  dialects: Dialect[]
 }
 
 export const api = {

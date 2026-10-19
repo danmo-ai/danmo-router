@@ -2,7 +2,7 @@ mod common;
 
 use common::{data_lines, sse, Harness};
 use danmo_core::billing::{self, ModelPriceInput};
-use danmo_core::services::channel::ChannelInput;
+use danmo_core::services::channel::{ChannelInput, ChannelModelInput};
 use serde_json::{json, Value};
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, ResponseTemplate};
@@ -10,7 +10,7 @@ use wiremock::{Mock, ResponseTemplate};
 fn convert_channel(models: &str, protocol: &str) -> ChannelInput {
     ChannelInput {
         name: "convert".into(),
-        models: models.into(),
+        models: ChannelModelInput::list(models),
         relay_mode: "convert".into(),
         upstream_protocol: protocol.into(),
         auth_style: if protocol == "anthropic_messages" {
@@ -135,7 +135,7 @@ data: {"type":"message_stop"}"#,
 async fn converted_usage_uses_model_native_field_set() {
     let h = Harness::new().await;
     let mut price = ModelPriceInput::new("deepseek-chat", 1.0, 1.0);
-    price.native_usage = "deepseek_chat".into();
+    price.native_dialects = r#"{"openai_chat":"thinking"}"#.into();
     billing::upsert_model_price(&h.pool, &price).await.unwrap();
 
     Mock::given(method("POST"))
@@ -263,4 +263,224 @@ async fn converted_upstream_error_uses_inbound_shape() {
     assert_eq!(v["error"]["type"], "invalid_request_error");
     assert_eq!(v["error"]["message"], "context too long");
     assert_eq!(h.used_quota().await, 0);
+}
+
+fn sent(h_reqs: &[wiremock::Request]) -> Value {
+    serde_json::from_slice(&h_reqs[0].body).unwrap()
+}
+
+#[tokio::test]
+async fn chat_thinking_client_converts_onto_anthropic() {
+    let h = Harness::new().await;
+    let mut price = ModelPriceInput::new("deepseek-chat", 1.0, 1.0);
+    price.native_dialects = r#"{"openai_chat":"thinking"}"#.into();
+    billing::upsert_model_price(&h.pool, &price).await.unwrap();
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .and(header("x-api-key", "sk-upstream"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "m", "type": "message", "role": "assistant", "model": "deepseek-chat",
+            "content": [
+                {"type": "thinking", "thinking": "hmm", "signature": "sig"},
+                {"type": "text", "text": "ok"}
+            ],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 10, "cache_read_input_tokens": 90, "output_tokens": 5}
+        })))
+        .mount(&h.mock)
+        .await;
+    h.channel(convert_channel("deepseek-chat", "anthropic_messages"))
+        .await;
+
+    let body = r#"{"model":"deepseek-chat","max_tokens":64,"thinking":{"type":"enabled"},"reasoning_effort":"high","zz_client":7,"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"a","reasoning_content":"plan"},{"role":"user","content":"go"}]}"#;
+    let (status, _, bytes) = h.call("/v1/chat/completions", &h.bearer(), body).await;
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&bytes));
+    let v: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["choices"][0]["message"]["reasoning_content"], "hmm");
+    assert_eq!(v["choices"][0]["message"]["content"], "ok");
+    assert_eq!(v["usage"]["prompt_cache_hit_tokens"], 90);
+    assert_eq!(v["usage"]["prompt_cache_miss_tokens"], 10);
+    assert_eq!(h.last_log().await.usage_adapter, "anthropic_messages");
+
+    let up = sent(&h.upstream_requests().await);
+    assert_eq!(up["thinking"]["type"], "enabled");
+    assert_eq!(up["thinking"]["budget_tokens"], 24576);
+    assert!(up["max_tokens"].as_i64().unwrap() > 24576);
+    assert!(up.get("reasoning_effort").is_none());
+    assert!(up.get("zz_client").is_none());
+    assert_eq!(
+        up["messages"][1]["content"],
+        json!([{"type": "text", "text": "a"}])
+    );
+}
+
+#[tokio::test]
+async fn responses_reasoning_converts_onto_responses_thinking() {
+    let h = Harness::new().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "r", "status": "completed", "model": "qwen-plus",
+            "output": [{"type": "message", "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok"}]}],
+            "usage": {"input_tokens": 8, "output_tokens": 2, "total_tokens": 10}
+        })))
+        .mount(&h.mock)
+        .await;
+    h.channel(ChannelInput {
+        upstream_protocol: "openai_responses".into(),
+        default_dialect: "thinking".into(),
+        ..convert_channel("qwen-plus", "openai_responses")
+    })
+    .await;
+
+    let body = r#"{"model":"qwen-plus","input":"hi","reasoning":{"effort":"high"}}"#;
+    let (status, _, bytes) = h.call("/v1/responses", &h.bearer(), body).await;
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&bytes));
+    let v: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["output"][0]["content"][0]["text"], "ok");
+    assert_eq!(v["usage"]["input_tokens"], 8);
+
+    let up = sent(&h.upstream_requests().await);
+    assert_eq!(up["thinking"], json!({"type": "enabled"}));
+    assert_eq!(up["reasoning"]["effort"], "high");
+    assert_eq!(up["input"][0]["content"][0]["text"], "hi");
+
+    let off = r#"{"model":"qwen-plus","input":"hi","reasoning":{"effort":"none"}}"#;
+    let (status, _, _) = h.call("/v1/responses", &h.bearer(), off).await;
+    assert_eq!(status, 200);
+    let up = serde_json::from_slice::<Value>(&h.upstream_requests().await[1].body).unwrap();
+    assert_eq!(up["thinking"], json!({"type": "disabled"}));
+    assert!(up.get("reasoning").is_none());
+}
+
+#[tokio::test]
+async fn gemini_thinking_converts_onto_qianfan_chat() {
+    let h = Harness::new().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "c",
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {
+                "role": "assistant", "content": "ok", "reasoning_content": "hmm"
+            }}],
+            "usage": {"prompt_tokens": 6, "completion_tokens": 2, "total_tokens": 8}
+        })))
+        .mount(&h.mock)
+        .await;
+    h.channel(ChannelInput {
+        default_dialect: "qianfan".into(),
+        ..convert_channel("deepseek-v4-flash", "openai_chat")
+    })
+    .await;
+
+    let body = r#"{"contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"thinkingConfig":{"thinkingBudget":2048,"includeThoughts":true}}}"#;
+    let (status, _, bytes) = h
+        .call(
+            "/v1beta/models/deepseek-v4-flash:generateContent",
+            &[("x-goog-api-key", h.key.clone())],
+            body,
+        )
+        .await;
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&bytes));
+    let v: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        v["candidates"][0]["content"]["parts"],
+        json!([{"text": "hmm", "thought": true}, {"text": "ok"}])
+    );
+    assert_eq!(v["usageMetadata"]["promptTokenCount"], 6);
+    assert_eq!(h.last_log().await.usage_adapter, "openai_chat");
+
+    let up = sent(&h.upstream_requests().await);
+    assert_eq!(up["model"], "deepseek-v4-flash");
+    assert_eq!(up["thinking"], json!({"type": "enabled"}));
+    assert_eq!(up["thinking_budget"], 2048);
+    assert!(up.get("reasoning_effort").is_none());
+    assert_eq!(up["messages"][0]["content"], "hi");
+}
+
+#[tokio::test]
+async fn messages_client_converts_onto_minimax_effort() {
+    let h = Harness::new().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "m", "type": "message", "role": "assistant", "model": "MiniMax-M2",
+            "content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn",
+            "usage": {"input_tokens": 4, "output_tokens": 1}
+        })))
+        .mount(&h.mock)
+        .await;
+    h.channel(ChannelInput {
+        default_dialect: "effort".into(),
+        ..convert_channel("MiniMax-M2", "anthropic_messages")
+    })
+    .await;
+
+    let body = r#"{"model":"MiniMax-M2","max_tokens":100,"thinking":{"type":"enabled"},"output_config":{"effort":"high"},"messages":[{"role":"user","content":"hi"}]}"#;
+    let (status, _, bytes) = h
+        .call("/v1/messages", &[("x-api-key", h.key.clone())], body)
+        .await;
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&bytes));
+    let v: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["content"][0]["text"], "ok");
+    assert_eq!(v["usage"]["input_tokens"], 4);
+
+    let up = sent(&h.upstream_requests().await);
+    assert_eq!(up["thinking"], json!({"type": "adaptive"}));
+    assert_eq!(up["output_config"], json!({"effort": "high"}));
+    assert!(up["max_tokens"].as_i64().unwrap() > 100);
+}
+
+#[tokio::test]
+async fn chat_stream_converts_onto_gemini_thoughts() {
+    let h = Harness::new().await;
+    Mock::given(method("POST"))
+        .and(path(
+            "/v1beta/models/glm-5:streamGenerateContent",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            sse(&[
+                r#"data: {"responseId":"g1","modelVersion":"glm-5","candidates":[{"content":{"role":"model","parts":[{"text":"hmm","thought":true}]}}]}"#,
+                r#"data: {"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":6,"candidatesTokenCount":2,"totalTokenCount":8}}"#,
+            ]),
+            "text/event-stream",
+        ))
+        .mount(&h.mock)
+        .await;
+    h.channel(convert_channel("glm-5", "gemini")).await;
+
+    let body = r#"{"model":"glm-5","stream":true,"stream_options":{"include_usage":true},"reasoning_effort":"high","messages":[{"role":"user","content":"hi"}]}"#;
+    let (status, headers, bytes) = h.call("/v1/chat/completions", &h.bearer(), body).await;
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&bytes));
+    assert_eq!(headers["content-type"], "text/event-stream");
+    let chunks = data_lines(&bytes);
+    let reasoning: String = chunks
+        .iter()
+        .filter_map(|c| {
+            c.pointer("/choices/0/delta/reasoning_content")
+                .and_then(Value::as_str)
+        })
+        .collect();
+    let text: String = chunks
+        .iter()
+        .filter_map(|c| {
+            c.pointer("/choices/0/delta/content")
+                .and_then(Value::as_str)
+        })
+        .collect();
+    assert_eq!(reasoning, "hmm");
+    assert_eq!(text, "ok");
+    assert_eq!(chunks.last().unwrap()["usage"]["prompt_tokens"], 6);
+    assert_eq!(h.last_log().await.usage_adapter, "gemini");
+
+    let req = &h.upstream_requests().await[0];
+    assert!(req.url.query().unwrap_or("").contains("alt=sse"));
+    let up: Value = serde_json::from_slice(&req.body).unwrap();
+    assert_eq!(
+        up["generationConfig"]["thinkingConfig"],
+        json!({"thinkingBudget": 24576, "includeThoughts": true})
+    );
+    assert_eq!(up["contents"][0]["parts"][0]["text"], "hi");
 }

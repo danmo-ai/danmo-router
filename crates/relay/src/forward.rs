@@ -1,13 +1,16 @@
 //! One pipeline for every inbound protocol.
 //!
-//! A channel whose upstream speaks the inbound protocol is a passthrough: the request and the
-//! response cross unchanged except for three edits (`model` mapping, Chat stream usage
-//! injection, and usage rewritten into the model's native field set). Any other pairing is
-//! converted through the IR. Usage is always read from the raw upstream response and matched
-//! by field features; a response without billable usage is a billing failure.
+//! The client speaks the inbound protocol in the model's native dialect (`standard` unless the
+//! price configures one); the upstream speaks the channel's protocol in the dialect of the
+//! model's row. When both sides match, or the row is opaque, the request is a passthrough: the
+//! bytes cross unchanged except for three edits (`model` mapping, Chat stream usage injection,
+//! and usage re-rendered into the native dialect's field set). Any other pairing is converted
+//! through the IR. Usage is always read from the raw upstream response and matched by field
+//! features; a response without billable usage is a billing failure.
 
 use crate::collect::{self, UsageCollector};
 use crate::convert::{self, StreamConverter};
+use crate::dialect::{self, DialectCodec};
 use crate::error::{protocol_error, upstream_message, RelayResult};
 use crate::sse::{self, SseEvent, SseParser};
 use crate::state::RelayState;
@@ -17,10 +20,11 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
 use danmo_core::billing::{self, BillingSession};
+use danmo_core::dialect::Dialect;
 use danmo_core::models::Channel;
 use danmo_core::protocol::{Protocol, RelayMode};
 use danmo_core::services::{channel, log as log_svc, token as token_svc};
-use danmo_core::usage::{self, match_usage, Usage, UsageAdapter};
+use danmo_core::usage::{match_usage, Usage};
 use danmo_core::{routing, AppError};
 use futures::stream::{self, StreamExt};
 use serde_json::{json, Value};
@@ -123,10 +127,10 @@ struct Ctx {
     mode: RelayMode,
     /// Strip the Chat usage chunk that only exists because we injected `include_usage`.
     strip_injected_usage: bool,
-    /// Field set the client should see usage in.
-    render: &'static dyn UsageAdapter,
-    /// Passthrough only: rewrite usage when the upstream used a different field set.
-    native: Option<&'static dyn UsageAdapter>,
+    client: &'static dyn DialectCodec,
+    upstream_dialect: &'static dyn DialectCodec,
+    /// Passthrough only: the configured native dialect, whose usage field set the client sees.
+    native: Option<&'static Dialect>,
     /// Chat clients only receive a usage chunk when they asked for it.
     client_wants_usage: bool,
 }
@@ -152,11 +156,8 @@ pub async fn handle(state: &RelayState, inbound: Inbound) -> RelayResult<Respons
         parsed.max_tokens,
     )
     .await?;
-    let native = billing
-        .native_usage
-        .as_deref()
-        .and_then(usage::adapter)
-        .filter(|a| a.protocol() == inbound.protocol);
+    let native = billing.native_dialects.configured(inbound.protocol);
+    let in_dialect = billing.native_dialects.get(inbound.protocol);
 
     let max_retries = state.config.relay_max_retries.max(1);
     let mut exclude = Vec::new();
@@ -177,6 +178,8 @@ pub async fn handle(state: &RelayState, inbound: Inbound) -> RelayResult<Respons
         let Some(candidate) = candidates.into_iter().next() else {
             break;
         };
+        let up_dialect = candidate.dialect();
+        let upstream_model = candidate.upstream_model().to_string();
         let ch = candidate.channel;
         exclude.push(ch.id);
 
@@ -189,18 +192,21 @@ pub async fn handle(state: &RelayState, inbound: Inbound) -> RelayResult<Respons
         };
 
         let upstream_protocol = ch.protocol();
-        let upstream_model = ch.upstream_model(&model);
-        let mode = if upstream_protocol == inbound.protocol {
+        let mode = if upstream_protocol == inbound.protocol
+            && (up_dialect.opaque || up_dialect.name == in_dialect.name)
+        {
             RelayMode::Passthrough
         } else {
             RelayMode::Convert
         };
+        let client = dialect::codec(in_dialect);
+        let upstream_dialect = dialect::codec(up_dialect);
         let (body, strip_injected_usage) = match mode {
             RelayMode::Passthrough => passthrough_body(&inbound, &parsed, &ch, &upstream_model),
             RelayMode::Convert => {
                 match convert::request(
-                    inbound.protocol,
-                    upstream_protocol,
+                    client,
+                    upstream_dialect,
                     &parsed.json,
                     &upstream_model,
                     parsed.stream,
@@ -259,7 +265,8 @@ pub async fn handle(state: &RelayState, inbound: Inbound) -> RelayResult<Respons
             upstream: upstream_protocol,
             mode,
             strip_injected_usage,
-            render: native.unwrap_or_else(|| usage::default_adapter(inbound.protocol)),
+            client,
+            upstream_dialect,
             native,
             client_wants_usage: parsed.json.pointer("/stream_options/include_usage")
                 == Some(&Value::Bool(true)),
@@ -405,7 +412,7 @@ async fn buffered_response(ctx: Ctx, response: reqwest::Response) -> RelayResult
             reason: "upstream body is not JSON".into(),
             raw_usage: None,
         }),
-        Some(v) => match collect::soft_error(v) {
+        Some(v) => match ctx.upstream_dialect.soft_error(v) {
             Some(reason) => Err(BillingFailure {
                 reason,
                 raw_usage: None,
@@ -429,21 +436,20 @@ async fn buffered_response(ctx: Ctx, response: reqwest::Response) -> RelayResult
     let body = parsed.expect("usage implies a parsed body");
 
     let out = match ctx.mode {
-        RelayMode::Passthrough => match ctx.native.filter(|n| n.name() != usage.adapter) {
-            Some(native) => {
+        RelayMode::Passthrough => match native_render(ctx.native, usage) {
+            Some(rendered) => {
                 let mut body = body;
-                body["usage"] = native.render(usage);
+                body["usage"] = rendered;
                 Bytes::from(body.to_string())
             }
             None => bytes,
         },
         RelayMode::Convert => {
             match convert::response(
-                ctx.upstream,
-                ctx.inbound,
+                ctx.upstream_dialect,
+                ctx.client,
                 &body,
                 usage,
-                ctx.render,
                 &ctx.billing.model,
             ) {
                 Ok(v) => {
@@ -471,6 +477,12 @@ async fn buffered_response(ctx: Ctx, response: reqwest::Response) -> RelayResult
     Ok((status, headers, out).into_response())
 }
 
+/// Usage in the native dialect's field set, when it differs from what the upstream sent.
+fn native_render(native: Option<&'static Dialect>, usage: &Usage) -> Option<Value> {
+    let render = native?.render_for(&usage.adapter);
+    (render.name() != usage.adapter).then(|| render.render(usage))
+}
+
 fn json_headers() -> HeaderMap {
     let mut h = HeaderMap::new();
     h.insert("content-type", HeaderValue::from_static("application/json"));
@@ -492,7 +504,7 @@ fn sse_headers() -> HeaderMap {
 struct PassthroughStream {
     protocol: Protocol,
     strip_injected_usage: bool,
-    native: Option<&'static dyn UsageAdapter>,
+    native: Option<&'static Dialect>,
 }
 
 impl PassthroughStream {
@@ -507,14 +519,13 @@ impl PassthroughStream {
                     if self.strip_injected_usage && no_choices {
                         return Vec::new();
                     }
-                    if let Some(native) = self.native {
-                        if let Ok(parsed) = match_usage(raw, self.protocol) {
-                            if parsed.adapter != native.name() {
-                                let mut j = j.clone();
-                                j["usage"] = native.render(&parsed);
-                                return vec![sse::encode(ev.event.as_deref(), &j)];
-                            }
-                        }
+                    if let Some(rendered) = match_usage(raw, self.protocol)
+                        .ok()
+                        .and_then(|parsed| native_render(self.native, &parsed))
+                    {
+                        let mut j = j.clone();
+                        j["usage"] = rendered;
+                        return vec![sse::encode(ev.event.as_deref(), &j)];
                     }
                 }
             }
@@ -558,9 +569,8 @@ fn stream_response(ctx: Ctx, response: reqwest::Response) -> Response {
         RelayMode::Convert => (
             sse_headers(),
             StreamMode::Convert(Box::new(StreamConverter::new(
-                ctx.upstream,
-                ctx.inbound,
-                ctx.render,
+                ctx.upstream_dialect,
+                ctx.client,
                 ctx.billing.model.clone(),
                 ctx.client_wants_usage,
             ))),
@@ -572,7 +582,7 @@ fn stream_response(ctx: Ctx, response: reqwest::Response) -> Response {
 
     tokio::spawn(async move {
         let mut parser = SseParser::default();
-        let mut collector = UsageCollector::new(ctx.upstream);
+        let mut collector = UsageCollector::new(ctx.upstream_dialect);
         let mut client_gone = false;
         let mut stream_error = None;
 

@@ -98,7 +98,7 @@ async fn token_auth_and_billing_settle_refund() {
             type_: "openai_compat".into(),
             key: "sk-test".into(),
             base_url: "https://example.com".into(),
-            models: "gpt-4o-mini".into(),
+            models: channel::ChannelModelInput::list("gpt-4o-mini"),
             group_name: "default".into(),
             priority: 10,
             ..Default::default()
@@ -151,7 +151,7 @@ async fn routing_filters_by_inbound_protocol() {
         name: name.into(),
         key: "sk".into(),
         base_url: "https://example.com".into(),
-        models: "m1".into(),
+        models: channel::ChannelModelInput::list("m1"),
         priority,
         relay_mode: mode.into(),
         upstream_protocol: protocol.into(),
@@ -205,15 +205,275 @@ async fn migrations_are_idempotent_and_prices_validate() {
 
     let mut input = billing::ModelPriceInput::new("deepseek-chat", 0.5, 2.0);
     input.cache_read_ratio = 0.1;
-    input.native_usage = "deepseek_chat".into();
+    input.native_dialects = r#"{"openai_chat":"thinking","anthropic_messages":"standard"}"#.into();
     input.periods = r#"[{"start":"16:30","end":"00:30","multiplier":0.5}]"#.into();
     let saved = billing::upsert_model_price(&pool, &input).await.unwrap();
-    assert_eq!(saved.native_usage, "deepseek_chat");
+    assert_eq!(
+        saved.native_dialects,
+        r#"{"anthropic_messages":"standard","openai_chat":"thinking"}"#
+    );
     assert_eq!(saved.cache_read_ratio, 0.1);
 
-    input.native_usage = "nope".into();
-    assert!(billing::upsert_model_price(&pool, &input).await.is_err());
-    input.native_usage = String::new();
+    for bad in [
+        r#"{"openai_chat":"nope"}"#,
+        r#"{"openai_chat":"opaque"}"#,
+        r#"{"gemini":"thinking"}"#,
+        r#"{"carrier_pigeon":"standard"}"#,
+        "[]",
+    ] {
+        input.native_dialects = bad.into();
+        assert!(
+            billing::upsert_model_price(&pool, &input).await.is_err(),
+            "{bad}"
+        );
+    }
+    input.native_dialects = String::new();
     input.tiers = "not json".into();
     assert!(billing::upsert_model_price(&pool, &input).await.is_err());
+}
+
+#[tokio::test]
+async fn channel_rows_carry_upstream_model_and_dialect() {
+    let (pool, config, _dir) = setup().await;
+    let qianfan = channel::create_channel(
+        &pool,
+        &config.encryption_key,
+        channel::ChannelInput {
+            name: "qianfan".into(),
+            key: "sk".into(),
+            base_url: "https://qianfan.example.com/v2".into(),
+            default_dialect: "qianfan".into(),
+            vendor: "baidu".into(),
+            models: vec![
+                channel::ChannelModelInput::new("deepseek-v4-flash"),
+                channel::ChannelModelInput::with("ernie-5.0", "ernie-5.0-preview", "qianfan_ernie"),
+                channel::ChannelModelInput::with("same", "same", ""),
+            ],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(qianfan.default_dialect, "qianfan");
+    let rows = channel::list_models(&pool, qianfan.id).await.unwrap();
+    let got: Vec<_> = rows
+        .iter()
+        .map(|r| {
+            (
+                r.model.as_str(),
+                r.upstream_model.as_str(),
+                r.upstream_dialect.as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            ("deepseek-v4-flash", "", "qianfan"),
+            ("ernie-5.0", "ernie-5.0-preview", "qianfan_ernie"),
+            ("same", "", "qianfan"),
+        ]
+    );
+
+    let ernie = routing::select_channels(&pool, "default", "ernie-5.0", Protocol::OpenaiChat, &[])
+        .await
+        .unwrap();
+    assert_eq!(ernie[0].upstream_model(), "ernie-5.0-preview");
+    assert_eq!(ernie[0].dialect().id(), "openai_chat/qianfan_ernie");
+    let ds = routing::select_channels(
+        &pool,
+        "default",
+        "deepseek-v4-flash",
+        Protocol::OpenaiChat,
+        &[],
+    )
+    .await
+    .unwrap();
+    assert_eq!(ds[0].upstream_model(), "deepseek-v4-flash");
+    assert_eq!(ds[0].dialect().name, "qianfan");
+
+    let bad = |models, default: &str| channel::ChannelInput {
+        name: "bad".into(),
+        key: "sk".into(),
+        base_url: "https://example.com".into(),
+        default_dialect: default.into(),
+        models,
+        ..Default::default()
+    };
+    for input in [
+        bad(
+            vec![channel::ChannelModelInput::with("m", "", "effort")],
+            "standard",
+        ),
+        bad(
+            channel::ChannelModelInput::list("m"),
+            "enable_thinking_typo",
+        ),
+        bad(channel::ChannelModelInput::list("m,m"), "standard"),
+    ] {
+        assert!(
+            channel::create_channel(&pool, &config.encryption_key, input)
+                .await
+                .is_err()
+        );
+    }
+
+    channel::update_channel(
+        &pool,
+        &config.encryption_key,
+        qianfan.id,
+        channel::ChannelInput {
+            name: "qianfan".into(),
+            base_url: "https://qianfan.example.com/v2".into(),
+            models: channel::ChannelModelInput::list("ernie-5.0"),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(routing::select_channels(
+        &pool,
+        "default",
+        "deepseek-v4-flash",
+        Protocol::OpenaiChat,
+        &[]
+    )
+    .await
+    .is_err());
+    let view = channel::get_view(&pool, qianfan.id).await.unwrap();
+    assert_eq!(view.models.len(), 1);
+    assert_eq!(view.models[0].upstream_dialect, "standard");
+
+    channel::delete_channel(&pool, qianfan.id).await.unwrap();
+    let left: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM channel_models")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(left.0, 0);
+}
+
+#[tokio::test]
+async fn opaque_rows_only_serve_their_own_protocol() {
+    let (pool, config, _dir) = setup().await;
+    for (name, dialect, priority) in [("router", "opaque", 2), ("vendor", "thinking", 1)] {
+        channel::create_channel(
+            &pool,
+            &config.encryption_key,
+            channel::ChannelInput {
+                name: name.into(),
+                key: "sk".into(),
+                base_url: "https://example.com".into(),
+                relay_mode: "convert".into(),
+                default_dialect: dialect.into(),
+                models: channel::ChannelModelInput::list("deepseek-v4-flash"),
+                priority,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    }
+    let names = |p| {
+        let pool = pool.clone();
+        async move {
+            routing::select_channels(&pool, "default", "deepseek-v4-flash", p, &[])
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|c| c.channel.name)
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(names(Protocol::OpenaiChat).await, vec!["router", "vendor"]);
+    assert_eq!(names(Protocol::AnthropicMessages).await, vec!["vendor"]);
+}
+
+/// A database created before channel_models: comma-separated models plus a JSON mapping on the
+/// channel, and `native_usage` on the price.
+#[tokio::test]
+async fn migration_003_moves_models_into_rows() {
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::str::FromStr;
+
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("old.db");
+    let url = format!("sqlite://{}?mode=rwc", db_path.display());
+    let old = SqlitePoolOptions::new()
+        .connect_with(SqliteConnectOptions::from_str(&url).unwrap())
+        .await
+        .unwrap();
+    for sql in [
+        include_str!("../migrations/001_init.sql"),
+        include_str!("../migrations/002_dialect.sql"),
+        r#"INSERT INTO channels (name, key_enc, base_url, models, model_mapping, upstream_protocol)
+           VALUES ('chat', 'k', 'https://a', 'deepseek-chat, gpt-4o ,deepseek-chat,', '{"gpt-4o":"openai/gpt-4o"}', 'openai_chat');
+           INSERT INTO channels (name, key_enc, base_url, models, model_mapping, upstream_protocol)
+           VALUES ('msgs', 'k', 'https://b', 'deepseek-chat', 'not json', 'anthropic_messages');
+           INSERT INTO abilities (channel_id, group_name, model) VALUES (1, 'default', 'deepseek-chat');
+           INSERT INTO model_prices (model, native_usage) VALUES ('deepseek-chat', 'deepseek_chat');
+           INSERT INTO model_prices (model, native_usage) VALUES ('kimi-k2', 'kimi_chat');
+           INSERT INTO model_prices (model, native_usage) VALUES ('gpt-4o', '')"#,
+    ] {
+        for stmt in sql.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+            sqlx::query(stmt).execute(&old).await.unwrap();
+        }
+    }
+    old.close().await;
+
+    let mut config = Config::from_env().unwrap();
+    config.database_url = url;
+    let pool = connect(&config).await.unwrap();
+
+    let rows: Vec<(i64, String, String, String)> = sqlx::query_as(
+        "SELECT channel_id, model, upstream_model, upstream_dialect FROM channel_models ORDER BY channel_id, model",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let rows: Vec<_> = rows
+        .iter()
+        .map(|(c, m, u, d)| (*c, m.as_str(), u.as_str(), d.as_str()))
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            (1, "deepseek-chat", "", "thinking"),
+            (1, "gpt-4o", "openai/gpt-4o", "standard"),
+            (2, "deepseek-chat", "", "standard"),
+        ]
+    );
+
+    let prices: Vec<(String, String)> =
+        sqlx::query_as("SELECT model, native_dialects FROM model_prices ORDER BY model")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    let find = |m: &str| prices.iter().find(|p| p.0 == m).unwrap().1.clone();
+    assert_eq!(find("deepseek-chat"), r#"{"openai_chat":"thinking"}"#);
+    assert_eq!(find("kimi-k2"), r#"{"openai_chat":"kimi"}"#);
+    assert_eq!(find("gpt-4o"), "");
+
+    let ch = channel::get_by_id(&pool, 1).await.unwrap();
+    assert_eq!(ch.default_dialect, "standard");
+    let cols: Vec<(String,)> = sqlx::query_as("SELECT name FROM pragma_table_info('channels')")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert!(!cols
+        .iter()
+        .any(|c| c.0 == "models" || c.0 == "model_mapping"));
+
+    let routed =
+        routing::select_channels(&pool, "default", "deepseek-chat", Protocol::OpenaiChat, &[])
+            .await
+            .unwrap();
+    assert_eq!(routed[0].dialect().id(), "openai_chat/thinking");
+
+    drop(pool);
+    let pool = connect(&config).await.unwrap();
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM channel_models")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count.0, 3);
 }

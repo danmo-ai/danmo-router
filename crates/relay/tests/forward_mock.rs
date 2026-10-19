@@ -2,7 +2,7 @@ mod common;
 
 use common::{data_lines, sse, Harness, USER_QUOTA};
 use danmo_core::billing::{self, ModelPriceInput};
-use danmo_core::services::channel::ChannelInput;
+use danmo_core::services::channel::{ChannelInput, ChannelModelInput};
 use serde_json::{json, Value};
 use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, ResponseTemplate};
@@ -10,7 +10,7 @@ use wiremock::{Mock, ResponseTemplate};
 fn chat_channel(models: &str) -> ChannelInput {
     ChannelInput {
         name: "mock".into(),
-        models: models.into(),
+        models: ChannelModelInput::list(models),
         ..Default::default()
     }
 }
@@ -64,8 +64,11 @@ async fn passthrough_forwards_body_bytes_and_only_remaps_model() {
         .mount(&h.mock)
         .await;
     h.channel(ChannelInput {
-        model_mapping: r#"{"deepseek-v4-flash":"deepseek-ai/DeepSeek-V4-Flash"}"#.into(),
-        ..chat_channel("deepseek-v4-flash,glm-5")
+        models: vec![
+            ChannelModelInput::with("deepseek-v4-flash", "deepseek-ai/DeepSeek-V4-Flash", ""),
+            ChannelModelInput::new("glm-5"),
+        ],
+        ..chat_channel("")
     })
     .await;
 
@@ -150,7 +153,7 @@ async fn requested_stream_usage_is_forwarded_untouched() {
 async fn usage_is_rewritten_into_model_native_field_set() {
     let h = Harness::new().await;
     let mut price = ModelPriceInput::new("deepseek-chat", 1.0, 1.0);
-    price.native_usage = "deepseek_chat".into();
+    price.native_dialects = r#"{"openai_chat":"thinking"}"#.into();
     billing::upsert_model_price(&h.pool, &price).await.unwrap();
 
     Mock::given(method("POST"))
@@ -207,7 +210,11 @@ async fn minimax_soft_error_is_a_billing_failure() {
         })))
         .mount(&h.mock)
         .await;
-    h.channel(chat_channel("MiniMax-M2")).await;
+    h.channel(ChannelInput {
+        default_dialect: "minimax".into(),
+        ..chat_channel("MiniMax-M2")
+    })
+    .await;
     let (status, _, _) = h
         .call(
             "/v1/chat/completions",

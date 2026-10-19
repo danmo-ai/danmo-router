@@ -1,5 +1,6 @@
 mod collect;
 mod convert;
+mod dialect;
 mod error;
 mod forward;
 mod router;

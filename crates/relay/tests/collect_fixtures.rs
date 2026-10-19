@@ -4,7 +4,7 @@
 mod common;
 
 use common::{sse, Harness};
-use danmo_core::services::channel::ChannelInput;
+use danmo_core::services::channel::{ChannelInput, ChannelModelInput};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
@@ -32,7 +32,7 @@ async fn run(case: Case) {
         .await;
     h.channel(ChannelInput {
         name: "c".into(),
-        models: "m".into(),
+        models: ChannelModelInput::list("m"),
         upstream_protocol: case.protocol.into(),
         ..Default::default()
     })

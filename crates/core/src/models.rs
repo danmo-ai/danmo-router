@@ -93,7 +93,6 @@ pub struct Channel {
     #[serde(skip_serializing)]
     pub key_enc: String,
     pub base_url: String,
-    pub models: String,
     pub group_name: String,
     pub priority: i64,
     pub weight: i64,
@@ -103,8 +102,31 @@ pub struct Channel {
     pub relay_mode: String,
     pub upstream_protocol: String,
     pub auth_style: String,
-    pub model_mapping: String,
     pub inject_stream_usage: i64,
+    /// Dialect pre-filled on new model rows; forwarding only reads the row.
+    pub default_dialect: String,
+    /// Original vendor, used by the admin portal to suggest native dialects.
+    pub vendor: String,
+}
+
+/// One model served by a channel, with the upstream name and the dialect the upstream speaks.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct ChannelModel {
+    pub id: i64,
+    pub channel_id: i64,
+    pub model: String,
+    pub upstream_model: String,
+    pub upstream_dialect: String,
+}
+
+impl ChannelModel {
+    pub fn upstream_name(&self) -> &str {
+        if self.upstream_model.is_empty() {
+            &self.model
+        } else {
+            &self.upstream_model
+        }
+    }
 }
 
 impl Channel {
@@ -128,7 +150,8 @@ impl Channel {
         self.inject_stream_usage != 0
     }
 
-    /// Whether this channel can serve requests that arrive in `inbound` protocol.
+    /// Whether this channel can serve requests that arrive in `inbound` protocol. The mode only
+    /// governs cross-protocol conversion; dialect conversion within a protocol is always allowed.
     pub fn serves(&self, inbound: Protocol) -> bool {
         let upstream = self.protocol();
         match self.mode() {
@@ -137,23 +160,6 @@ impl Channel {
                 upstream == inbound || (upstream.is_conversational() && inbound.is_conversational())
             }
         }
-    }
-
-    /// Upstream model name; `model_mapping` is a JSON object from client name to upstream name.
-    pub fn upstream_model(&self, model: &str) -> String {
-        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&self.model_mapping)
-            .ok()
-            .and_then(|m| m.get(model).and_then(|v| v.as_str()).map(str::to_string))
-            .unwrap_or_else(|| model.to_string())
-    }
-
-    pub fn model_list(&self) -> Vec<String> {
-        self.models
-            .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-            .collect()
     }
 }
 
@@ -177,7 +183,14 @@ pub struct ModelPrice {
     pub search_price: f64,
     pub tiers: String,
     pub periods: String,
-    pub native_usage: String,
+    /// JSON object from protocol id to the model's native dialect name on that protocol.
+    pub native_dialects: String,
+}
+
+impl ModelPrice {
+    pub fn native_dialect_map(&self) -> std::collections::HashMap<String, String> {
+        serde_json::from_str(&self.native_dialects).unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]

@@ -1,6 +1,7 @@
-//! Protocol conversion through the IR. Each conversational protocol has one codec; any inbound
-//! and upstream pair (12 directions) is a decode followed by an encode. Converters never look
-//! at model names and never change reasoning settings beyond mapping their representation.
+//! Conversion through the IR. Each conversational protocol has one base codec and each dialect
+//! layers its spec on top (see `crate::dialect`); any pair of dialects is a decode followed by
+//! an encode. Converters never look at model names and never change reasoning settings beyond
+//! mapping their representation. Unknown fields survive conversions within one protocol.
 
 mod chat;
 mod gemini;
@@ -9,11 +10,25 @@ mod messages;
 mod responses;
 
 use crate::collect::UsageCollector;
+use crate::dialect::DialectCodec;
 use crate::sse::SseEvent;
 use bytes::Bytes;
+use danmo_core::dialect::Dialect;
 use danmo_core::protocol::Protocol;
 use danmo_core::usage::{match_usage, Usage, UsageAdapter};
 use serde_json::Value;
+use tracing::debug;
+
+/// Request fields the base codec of `protocol` reads.
+fn base_keys(protocol: Protocol) -> &'static [&'static str] {
+    match protocol {
+        Protocol::OpenaiChat => chat::REQUEST_KEYS,
+        Protocol::OpenaiResponses => responses::REQUEST_KEYS,
+        Protocol::AnthropicMessages => messages::REQUEST_KEYS,
+        Protocol::Gemini => gemini::REQUEST_KEYS,
+        Protocol::Embeddings => &[],
+    }
+}
 
 fn decode_request(protocol: Protocol, body: &Value) -> Result<ir::Request, String> {
     match protocol {
@@ -35,40 +50,84 @@ fn encode_request(protocol: Protocol, req: &ir::Request, model: &str) -> Result<
     })
 }
 
+/// Decode `body` in dialect `from`, encode it in dialect `to`.
 pub fn request(
-    from: Protocol,
-    to: Protocol,
+    from: &dyn DialectCodec,
+    to: &dyn DialectCodec,
     body: &Value,
     upstream_model: &str,
     stream: bool,
 ) -> Result<Value, String> {
-    let mut req = decode_request(from, body)?;
+    let (fp, tp) = (from.spec().protocol, to.spec().protocol);
+    let mut req = decode_request(fp, body)?;
+    from.read_request(body, &mut req);
     req.stream = stream;
-    encode_request(to, &req, upstream_model)
+    let known: Vec<&str> = base_keys(fp)
+        .iter()
+        .chain(from.request_keys())
+        .copied()
+        .collect();
+    let unknown = ir::unknown_fields(body, &known);
+    if fp == tp {
+        req.extra = unknown;
+    } else {
+        if !unknown.is_empty() {
+            debug!(
+                from = %from.spec().id(),
+                to = %to.spec().id(),
+                dropped = ?unknown.keys().collect::<Vec<_>>(),
+                "fields without a counterpart dropped"
+            );
+        }
+        for m in &mut req.messages {
+            m.extra.clear();
+        }
+    }
+    let mut out = encode_request(tp, &req, upstream_model)?;
+    let obj = out
+        .as_object_mut()
+        .ok_or("encoded request is not an object")?;
+    ir::insert_missing(obj, &req.extra);
+    to.write_request(&req, obj);
+    Ok(out)
 }
 
+/// Decode an upstream response in dialect `from`, encode it for a client of dialect `to`.
 pub fn response(
-    from: Protocol,
-    to: Protocol,
+    from: &dyn DialectCodec,
+    to: &dyn DialectCodec,
     body: &Value,
     usage: &Usage,
-    render: &'static dyn UsageAdapter,
     model: &str,
 ) -> Result<Value, String> {
-    let resp = match from {
+    let (fp, tp) = (from.spec().protocol, to.spec().protocol);
+    let render = to.spec().render_for(&usage.adapter);
+    let mut resp = match fp {
         Protocol::OpenaiChat => chat::decode_response(body),
         Protocol::OpenaiResponses => responses::decode_response(body),
         Protocol::AnthropicMessages => messages::decode_response(body),
         Protocol::Gemini => gemini::decode_response(body),
         Protocol::Embeddings => Err("embeddings cannot be converted".into()),
     }?;
-    Ok(match to {
+    if fp == tp {
+        for k in from.response_keys() {
+            resp.extra.remove(*k);
+        }
+    } else {
+        resp.extra.clear();
+        resp.message_extra.clear();
+    }
+    let mut out = match tp {
         Protocol::OpenaiChat => chat::encode_response(&resp, usage, render, model),
         Protocol::OpenaiResponses => responses::encode_response(&resp, usage, render, model),
         Protocol::AnthropicMessages => messages::encode_response(&resp, usage, render, model),
         Protocol::Gemini => gemini::encode_response(&resp, usage, render, model),
         Protocol::Embeddings => return Err("embeddings cannot be converted".into()),
-    })
+    };
+    if let Some(obj) = out.as_object_mut() {
+        ir::insert_missing(obj, &resp.extra);
+    }
+    Ok(out)
 }
 
 enum Decoder {
@@ -141,23 +200,23 @@ pub struct StreamConverter {
     decoder: Decoder,
     encoder: Encoder,
     collector: Option<UsageCollector>,
-    render: &'static dyn UsageAdapter,
+    client: &'static Dialect,
 }
 
 impl StreamConverter {
     pub fn new(
-        from: Protocol,
-        to: Protocol,
-        render: &'static dyn UsageAdapter,
+        from: &'static dyn DialectCodec,
+        to: &'static dyn DialectCodec,
         model: String,
         include_usage: bool,
     ) -> Self {
+        let upstream = from.spec().protocol;
         Self {
-            upstream: from,
-            decoder: Decoder::new(from),
-            encoder: Encoder::new(to, model, include_usage),
+            upstream,
+            decoder: Decoder::new(upstream),
+            encoder: Encoder::new(to.spec().protocol, model, include_usage),
             collector: Some(UsageCollector::new(from)),
-            render,
+            client: to.spec(),
         }
     }
 
@@ -182,7 +241,10 @@ impl StreamConverter {
             .take()
             .and_then(UsageCollector::finish)
             .and_then(|raw| match_usage(&raw, self.upstream).ok());
-        self.encoder.finish(usage.as_ref(), self.render)
+        let render = self
+            .client
+            .render_for(usage.as_ref().map_or("", |u| u.adapter.as_str()));
+        self.encoder.finish(usage.as_ref(), render)
     }
 }
 
