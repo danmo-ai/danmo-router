@@ -59,22 +59,44 @@ fn ensure_sqlite_parent_dir(url: &str) -> AppResult<()> {
 const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/001_init.sql"),
     include_str!("../migrations/002_dialect.sql"),
+    include_str!("../migrations/003_channel_models.sql"),
 ];
 
-async fn migrate(pool: &DbPool) -> AppResult<()> {
-    for sql in MIGRATIONS {
+/// Runs each migration once, recorded in `schema_migrations`. Databases created before the
+/// table existed re-run 001/002 once; those only create-if-missing or add columns.
+pub async fn migrate(pool: &DbPool) -> AppResult<()> {
+    sqlx::query("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)")
+        .execute(pool)
+        .await?;
+    for (i, sql) in MIGRATIONS.iter().enumerate() {
+        let version = i as i64 + 1;
+        let applied: Option<(i64,)> =
+            sqlx::query_as("SELECT version FROM schema_migrations WHERE version = ?")
+                .bind(version)
+                .fetch_optional(pool)
+                .await?;
+        if applied.is_some() {
+            continue;
+        }
+        let mut tx = pool.begin().await?;
         for statement in sql.split(';') {
             let stmt = statement.trim();
             if stmt.is_empty() {
                 continue;
             }
-            // SQLite has no `ADD COLUMN IF NOT EXISTS`; re-running an applied ALTER is expected.
-            match sqlx::query(stmt).execute(pool).await {
+            // SQLite has no `ADD COLUMN IF NOT EXISTS`.
+            match sqlx::query(stmt).execute(&mut *tx).await {
                 Ok(_) => {}
                 Err(sqlx::Error::Database(e)) if e.message().contains("duplicate column name") => {}
                 Err(e) => return Err(e.into()),
             }
         }
+        sqlx::query("INSERT INTO schema_migrations (version) VALUES (?)")
+            .bind(version)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        info!("applied migration {version}");
     }
     Ok(())
 }
