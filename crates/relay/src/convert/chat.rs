@@ -8,6 +8,52 @@ use danmo_core::usage::UsageAdapter;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 
+/// Request fields the Chat codec reads; anything else is a dialect field or an extra.
+pub const REQUEST_KEYS: &[&str] = &[
+    "model",
+    "messages",
+    "max_tokens",
+    "max_completion_tokens",
+    "temperature",
+    "top_p",
+    "stop",
+    "stream",
+    "stream_options",
+    "reasoning_effort",
+    "tools",
+    "tool_choice",
+];
+
+const MESSAGE_KEYS: &[&str] = &[
+    "role",
+    "content",
+    "reasoning_content",
+    "reasoning",
+    "reasoning_details",
+    "tool_calls",
+];
+
+const RESPONSE_KEYS: &[&str] = &["id", "object", "created", "model", "choices", "usage"];
+
+/// Reasoning text of a message or delta. An empty `reasoning_content` is kept: thinking-mode
+/// upstreams require it echoed back on assistant turns.
+fn reasoning_of(m: &Value) -> Option<String> {
+    if let Some(r) = m
+        .get("reasoning_content")
+        .or_else(|| m.get("reasoning"))
+        .and_then(Value::as_str)
+    {
+        return Some(r.to_string());
+    }
+    let details = m.get("reasoning_details")?.as_array()?;
+    Some(
+        details
+            .iter()
+            .filter_map(|d| d.get("text").and_then(Value::as_str))
+            .collect(),
+    )
+}
+
 pub fn decode_request(body: &Value) -> Result<Request, String> {
     let mut req = Request {
         max_tokens: body
@@ -26,11 +72,15 @@ pub fn decode_request(body: &Value) -> Result<Request, String> {
             .extend(a.iter().filter_map(|s| s.as_str().map(str::to_string))),
         _ => {}
     }
-    if let Some(effort) = body.get("reasoning_effort").and_then(Value::as_str) {
-        req.reasoning = Some(Reasoning {
-            effort: Some(effort.to_string()),
-            budget_tokens: None,
-        });
+    match body.get("reasoning_effort").and_then(Value::as_str) {
+        Some("none") => req.reasoning = Some(Reasoning::off()),
+        Some(effort) => {
+            req.reasoning = Some(Reasoning {
+                effort: Some(effort.to_string()),
+                ..Reasoning::default()
+            })
+        }
+        None => {}
     }
 
     let messages = body
@@ -48,14 +98,9 @@ pub fn decode_request(body: &Value) -> Result<Request, String> {
             }
             "assistant" => {
                 let mut parts = Vec::new();
-                if let Some(r) = m
-                    .get("reasoning_content")
-                    .or_else(|| m.get("reasoning"))
-                    .and_then(Value::as_str)
-                    .filter(|s| !s.is_empty())
-                {
+                if let Some(r) = reasoning_of(m) {
                     parts.push(Part::Reasoning {
-                        text: r.to_string(),
+                        text: r,
                         signature: None,
                     });
                 }
@@ -83,7 +128,12 @@ pub fn decode_request(body: &Value) -> Result<Request, String> {
                             .to_string(),
                     });
                 }
-                push_parts(&mut req.messages, Role::Assistant, parts);
+                push_parts_with(
+                    &mut req.messages,
+                    Role::Assistant,
+                    parts,
+                    unknown_fields(m, MESSAGE_KEYS),
+                );
             }
             "tool" => {
                 let part = Part::ToolResult {
@@ -96,7 +146,12 @@ pub fn decode_request(body: &Value) -> Result<Request, String> {
             }
             _ => {
                 let parts = user_parts(m.get("content").unwrap_or(&Value::Null));
-                push_parts(&mut req.messages, Role::User, parts);
+                push_parts_with(
+                    &mut req.messages,
+                    Role::User,
+                    parts,
+                    unknown_fields(m, MESSAGE_KEYS),
+                );
             }
         }
     }
@@ -191,16 +246,22 @@ pub fn encode_request(req: &Request, model: &str) -> Value {
                 } else {
                     Value::Array(content)
                 };
-                messages.push(json!({"role": "user", "content": value}));
+                let mut msg = Map::new();
+                msg.insert("role".into(), json!("user"));
+                msg.insert("content".into(), value);
+                insert_missing(&mut msg, &m.extra);
+                messages.push(Value::Object(msg));
             }
             Role::Assistant => {
                 let mut text = String::new();
-                let mut reasoning = String::new();
+                let mut reasoning: Option<String> = None;
                 let mut calls = Vec::new();
                 for p in &m.parts {
                     match p {
                         Part::Text(t) => text.push_str(t),
-                        Part::Reasoning { text: r, .. } => reasoning.push_str(r),
+                        Part::Reasoning { text: r, .. } => {
+                            reasoning.get_or_insert_with(String::new).push_str(r)
+                        }
                         Part::ToolCall {
                             id,
                             name,
@@ -223,12 +284,13 @@ pub fn encode_request(req: &Request, model: &str) -> Value {
                         json!(text)
                     },
                 );
-                if !reasoning.is_empty() {
-                    msg.insert("reasoning_content".into(), json!(reasoning));
+                if let Some(r) = reasoning {
+                    msg.insert("reasoning_content".into(), json!(r));
                 }
                 if !calls.is_empty() {
                     msg.insert("tool_calls".into(), Value::Array(calls));
                 }
+                insert_missing(&mut msg, &m.extra);
                 messages.push(Value::Object(msg));
             }
         }
@@ -249,8 +311,14 @@ pub fn encode_request(req: &Request, model: &str) -> Value {
     if !req.stop.is_empty() {
         out.insert("stop".into(), json!(req.stop));
     }
-    if let Some(r) = &req.reasoning {
-        out.insert("reasoning_effort".into(), json!(r.effort()));
+    match &req.reasoning {
+        Some(r) if r.is_off() => {
+            out.insert("reasoning_effort".into(), json!("none"));
+        }
+        Some(r) if r.has_level() => {
+            out.insert("reasoning_effort".into(), json!(r.effort()));
+        }
+        _ => {}
     }
     if !req.tools.is_empty() {
         let tools: Vec<Value> = req
@@ -308,14 +376,9 @@ pub fn decode_response(body: &Value) -> Result<Response, String> {
         .ok_or("response has no choices")?;
     let msg = choice.get("message").cloned().unwrap_or(json!({}));
     let mut parts = Vec::new();
-    if let Some(r) = msg
-        .get("reasoning_content")
-        .or_else(|| msg.get("reasoning"))
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-    {
+    if let Some(r) = reasoning_of(&msg).filter(|s| !s.is_empty()) {
         parts.push(Part::Reasoning {
-            text: r.to_string(),
+            text: r,
             signature: None,
         });
     }
@@ -347,6 +410,8 @@ pub fn decode_response(body: &Value) -> Result<Response, String> {
         id: str_field(body, "id").unwrap_or_else(|| gen_id("chatcmpl-")),
         parts,
         stop: stop_from(choice.get("finish_reason").and_then(Value::as_str)),
+        extra: unknown_fields(body, RESPONSE_KEYS),
+        message_extra: unknown_fields(&msg, MESSAGE_KEYS),
     })
 }
 
@@ -390,6 +455,7 @@ pub fn encode_response(
     if !calls.is_empty() {
         msg.insert("tool_calls".into(), Value::Array(calls));
     }
+    insert_missing(&mut msg, &resp.message_extra);
     json!({
         "id": resp.id,
         "object": "chat.completion",
@@ -421,13 +487,8 @@ impl Decoder {
             return out;
         };
         if let Some(delta) = choice.get("delta") {
-            if let Some(r) = delta
-                .get("reasoning_content")
-                .or_else(|| delta.get("reasoning"))
-                .and_then(Value::as_str)
-                .filter(|s| !s.is_empty())
-            {
-                out.push(Event::Reasoning(r.to_string()));
+            if let Some(r) = reasoning_of(delta).filter(|s| !s.is_empty()) {
+                out.push(Event::Reasoning(r));
             }
             if let Some(t) = delta
                 .get("content")

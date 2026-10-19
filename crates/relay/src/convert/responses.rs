@@ -7,6 +7,32 @@ use danmo_core::usage::{Usage, UsageAdapter};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 
+/// Request fields the Responses codec reads.
+pub const REQUEST_KEYS: &[&str] = &[
+    "model",
+    "input",
+    "instructions",
+    "max_output_tokens",
+    "temperature",
+    "top_p",
+    "stream",
+    "reasoning",
+    "tools",
+    "tool_choice",
+    "store",
+];
+
+const RESPONSE_KEYS: &[&str] = &[
+    "id",
+    "object",
+    "created_at",
+    "model",
+    "status",
+    "output",
+    "usage",
+    "incomplete_details",
+];
+
 pub fn decode_request(body: &Value) -> Result<Request, String> {
     let mut req = Request {
         max_tokens: body.get("max_output_tokens").and_then(Value::as_i64),
@@ -20,11 +46,15 @@ pub fn decode_request(body: &Value) -> Result<Request, String> {
             req.system.push(i.to_string());
         }
     }
-    if let Some(effort) = body.pointer("/reasoning/effort").and_then(Value::as_str) {
-        req.reasoning = Some(Reasoning {
-            effort: Some(effort.to_string()),
-            budget_tokens: None,
-        });
+    match body.pointer("/reasoning/effort").and_then(Value::as_str) {
+        Some("none") => req.reasoning = Some(Reasoning::off()),
+        Some(effort) => {
+            req.reasoning = Some(Reasoning {
+                effort: Some(effort.to_string()),
+                ..Reasoning::default()
+            })
+        }
+        None => {}
     }
 
     match body.get("input") {
@@ -204,11 +234,17 @@ pub fn encode_request(req: &Request, model: &str) -> Value {
     if let Some(p) = req.top_p {
         out.insert("top_p".into(), json!(p));
     }
-    if let Some(r) = &req.reasoning {
-        out.insert(
-            "reasoning".into(),
-            json!({"effort": r.effort(), "summary": "auto"}),
-        );
+    match &req.reasoning {
+        Some(r) if r.is_off() => {
+            out.insert("reasoning".into(), json!({"effort": "none"}));
+        }
+        Some(r) if r.has_level() || r.is_on() => {
+            out.insert(
+                "reasoning".into(),
+                json!({"effort": r.effort(), "summary": "auto"}),
+            );
+        }
+        _ => {}
     }
     if !req.tools.is_empty() {
         let tools: Vec<Value> = req
@@ -284,6 +320,8 @@ pub fn decode_response(body: &Value) -> Result<Response, String> {
         id: str_field(body, "id").unwrap_or_else(|| gen_id("resp_")),
         parts,
         stop: StopReason::Stop,
+        extra: unknown_fields(body, RESPONSE_KEYS),
+        message_extra: Map::new(),
     };
     resp.stop = if incomplete {
         match body
@@ -305,6 +343,7 @@ fn output_items(parts: &[Part]) -> Vec<Value> {
     let mut items = Vec::new();
     for p in parts {
         match p {
+            Part::Reasoning { text, .. } if text.is_empty() => {}
             Part::Reasoning { text, .. } => items.push(json!({
                 "type": "reasoning", "id": gen_id("rs_"),
                 "summary": [{"type": "summary_text", "text": text}]

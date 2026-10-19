@@ -7,6 +7,17 @@ use danmo_core::usage::{Usage, UsageAdapter};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 
+/// Request fields the Gemini codec reads.
+pub const REQUEST_KEYS: &[&str] = &[
+    "contents",
+    "systemInstruction",
+    "generationConfig",
+    "tools",
+    "toolConfig",
+];
+
+const RESPONSE_KEYS: &[&str] = &["candidates", "usageMetadata", "modelVersion", "responseId"];
+
 pub fn decode_request(body: &Value) -> Result<Request, String> {
     let gen = body.get("generationConfig").cloned().unwrap_or_default();
     let mut req = Request {
@@ -27,10 +38,13 @@ pub fn decode_request(body: &Value) -> Result<Request, String> {
     if let Some(tc) = gen.get("thinkingConfig") {
         let budget = tc.get("thinkingBudget").and_then(Value::as_i64);
         let level = str_field(tc, "thinkingLevel").map(|l| l.to_lowercase());
-        if budget != Some(0) && (budget.is_some() || level.is_some()) {
+        if budget == Some(0) {
+            req.reasoning = Some(Reasoning::off());
+        } else if budget.is_some() || level.is_some() {
             req.reasoning = Some(Reasoning {
                 effort: level,
                 budget_tokens: budget.filter(|b| *b > 0),
+                ..Reasoning::default()
             });
         }
     }
@@ -266,11 +280,17 @@ pub fn encode_request(req: &Request) -> Value {
     if !req.stop.is_empty() {
         gen.insert("stopSequences".into(), json!(req.stop));
     }
-    if let Some(r) = &req.reasoning {
-        gen.insert(
-            "thinkingConfig".into(),
-            json!({"thinkingBudget": r.budget(), "includeThoughts": true}),
-        );
+    match &req.reasoning {
+        Some(r) if r.is_off() => {
+            gen.insert("thinkingConfig".into(), json!({"thinkingBudget": 0}));
+        }
+        Some(r) if r.is_on() || r.has_level() => {
+            gen.insert(
+                "thinkingConfig".into(),
+                json!({"thinkingBudget": r.budget(), "includeThoughts": true}),
+            );
+        }
+        _ => {}
     }
     if !gen.is_empty() {
         out.insert("generationConfig".into(), Value::Object(gen));
@@ -367,6 +387,8 @@ pub fn decode_response(body: &Value) -> Result<Response, String> {
         id: str_field(body, "responseId").unwrap_or_default(),
         stop: stop_from(reason, has_tools).unwrap_or(StopReason::Stop),
         parts,
+        extra: unknown_fields(body, RESPONSE_KEYS),
+        message_extra: Map::new(),
     })
 }
 
@@ -375,6 +397,7 @@ fn parts_json(parts: &[Part]) -> Vec<Value> {
         .iter()
         .filter_map(|p| match p {
             Part::Text(t) => Some(json!({"text": t})),
+            Part::Reasoning { text, .. } if text.is_empty() => None,
             Part::Reasoning { text, .. } => Some(json!({"text": text, "thought": true})),
             Part::ToolCall {
                 id,
