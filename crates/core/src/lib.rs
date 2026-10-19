@@ -9,8 +9,9 @@ pub mod routing;
 pub mod services;
 pub mod usage;
 
-pub use billing::{BillingSession, Usage};
+pub use billing::BillingSession;
 pub use config::Config;
 pub use db::{connect, DbPool};
 pub use error::{AppError, AppResult};
 pub use models::*;
+pub use usage::Usage;

@@ -1,0 +1,18 @@
+ALTER TABLE channels ADD COLUMN relay_mode TEXT NOT NULL DEFAULT 'passthrough';
+ALTER TABLE channels ADD COLUMN upstream_protocol TEXT NOT NULL DEFAULT 'openai_chat';
+ALTER TABLE channels ADD COLUMN auth_style TEXT NOT NULL DEFAULT 'bearer';
+ALTER TABLE channels ADD COLUMN model_mapping TEXT NOT NULL DEFAULT '';
+ALTER TABLE channels ADD COLUMN inject_stream_usage INTEGER NOT NULL DEFAULT 1;
+
+ALTER TABLE model_prices ADD COLUMN cache_read_ratio REAL NOT NULL DEFAULT 1.0;
+ALTER TABLE model_prices ADD COLUMN cache_write_ratio REAL NOT NULL DEFAULT 1.0;
+ALTER TABLE model_prices ADD COLUMN search_price REAL NOT NULL DEFAULT 0;
+ALTER TABLE model_prices ADD COLUMN tiers TEXT NOT NULL DEFAULT '';
+ALTER TABLE model_prices ADD COLUMN periods TEXT NOT NULL DEFAULT '';
+ALTER TABLE model_prices ADD COLUMN native_usage TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE logs ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE logs ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE logs ADD COLUMN reasoning_tokens INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE logs ADD COLUMN usage_adapter TEXT NOT NULL DEFAULT '';
+ALTER TABLE logs ADD COLUMN raw_usage TEXT;

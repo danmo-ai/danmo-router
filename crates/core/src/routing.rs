@@ -1,6 +1,7 @@
 use crate::db::DbPool;
 use crate::error::{AppError, AppResult};
 use crate::models::Channel;
+use crate::protocol::Protocol;
 use rand::Rng;
 
 #[derive(Debug, Clone)]
@@ -8,11 +9,13 @@ pub struct ChannelCandidate {
     pub channel: Channel,
 }
 
-/// Select channels for a group+model, ordered by priority (desc), weight-random within same priority.
+/// Select channels for a group+model that can serve the inbound protocol, ordered by priority
+/// (desc), weight-random within same priority.
 pub async fn select_channels(
     pool: &DbPool,
     group_name: &str,
     model: &str,
+    inbound: Protocol,
     exclude_ids: &[i64],
 ) -> AppResult<Vec<ChannelCandidate>> {
     let rows: Vec<Channel> = sqlx::query_as(
@@ -33,12 +36,12 @@ pub async fn select_channels(
 
     let filtered: Vec<Channel> = rows
         .into_iter()
-        .filter(|c| !exclude_ids.contains(&c.id))
+        .filter(|c| !exclude_ids.contains(&c.id) && c.serves(inbound))
         .collect();
 
     if filtered.is_empty() {
         return Err(AppError::NotFound(format!(
-            "no available channel for model '{model}' in group '{group_name}'"
+            "no available {inbound} channel for model '{model}' in group '{group_name}'"
         )));
     }
 
@@ -107,6 +110,11 @@ mod tests {
             status: "enabled".into(),
             created_at: String::new(),
             updated_at: String::new(),
+            relay_mode: "passthrough".into(),
+            upstream_protocol: "openai_chat".into(),
+            auth_style: "bearer".into(),
+            model_mapping: String::new(),
+            inject_stream_usage: 1,
         }
     }
 

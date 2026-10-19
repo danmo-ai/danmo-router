@@ -1,3 +1,4 @@
+use crate::protocol::{AuthStyle, Protocol, RelayMode};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
@@ -99,11 +100,51 @@ pub struct Channel {
     pub status: String,
     pub created_at: String,
     pub updated_at: String,
+    pub relay_mode: String,
+    pub upstream_protocol: String,
+    pub auth_style: String,
+    pub model_mapping: String,
+    pub inject_stream_usage: i64,
 }
 
 impl Channel {
     pub fn is_enabled(&self) -> bool {
         self.status == "enabled"
+    }
+
+    pub fn mode(&self) -> RelayMode {
+        RelayMode::parse(&self.relay_mode).unwrap_or(RelayMode::Passthrough)
+    }
+
+    pub fn protocol(&self) -> Protocol {
+        Protocol::parse(&self.upstream_protocol).unwrap_or(Protocol::OpenaiChat)
+    }
+
+    pub fn auth(&self) -> AuthStyle {
+        AuthStyle::parse(&self.auth_style).unwrap_or(AuthStyle::Bearer)
+    }
+
+    pub fn injects_stream_usage(&self) -> bool {
+        self.inject_stream_usage != 0
+    }
+
+    /// Whether this channel can serve requests that arrive in `inbound` protocol.
+    pub fn serves(&self, inbound: Protocol) -> bool {
+        let upstream = self.protocol();
+        match self.mode() {
+            RelayMode::Passthrough => upstream == inbound,
+            RelayMode::Convert => {
+                upstream == inbound || (upstream.is_conversational() && inbound.is_conversational())
+            }
+        }
+    }
+
+    /// Upstream model name; `model_mapping` is a JSON object from client name to upstream name.
+    pub fn upstream_model(&self, model: &str) -> String {
+        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&self.model_mapping)
+            .ok()
+            .and_then(|m| m.get(model).and_then(|v| v.as_str()).map(str::to_string))
+            .unwrap_or_else(|| model.to_string())
     }
 
     pub fn model_list(&self) -> Vec<String> {
@@ -131,6 +172,12 @@ pub struct ModelPrice {
     pub model_ratio: f64,
     pub completion_ratio: f64,
     pub updated_at: String,
+    pub cache_read_ratio: f64,
+    pub cache_write_ratio: f64,
+    pub search_price: f64,
+    pub tiers: String,
+    pub periods: String,
+    pub native_usage: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -156,6 +203,11 @@ pub struct LogEntry {
     pub estimated: i64,
     pub error: Option<String>,
     pub created_at: String,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub reasoning_tokens: i64,
+    pub usage_adapter: String,
+    pub raw_usage: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
