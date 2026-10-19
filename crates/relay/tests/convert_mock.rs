@@ -2,7 +2,7 @@ mod common;
 
 use common::{data_lines, sse, Harness};
 use danmo_core::billing::{self, ModelPriceInput};
-use danmo_core::services::channel::ChannelInput;
+use danmo_core::services::channel::{ChannelInput, ChannelModelInput};
 use serde_json::{json, Value};
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, ResponseTemplate};
@@ -10,7 +10,7 @@ use wiremock::{Mock, ResponseTemplate};
 fn convert_channel(models: &str, protocol: &str) -> ChannelInput {
     ChannelInput {
         name: "convert".into(),
-        models: models.into(),
+        models: ChannelModelInput::list(models),
         relay_mode: "convert".into(),
         upstream_protocol: protocol.into(),
         auth_style: if protocol == "anthropic_messages" {
@@ -135,7 +135,7 @@ data: {"type":"message_stop"}"#,
 async fn converted_usage_uses_model_native_field_set() {
     let h = Harness::new().await;
     let mut price = ModelPriceInput::new("deepseek-chat", 1.0, 1.0);
-    price.native_usage = "deepseek_chat".into();
+    price.native_dialects = r#"{"openai_chat":"thinking"}"#.into();
     billing::upsert_model_price(&h.pool, &price).await.unwrap();
 
     Mock::given(method("POST"))
