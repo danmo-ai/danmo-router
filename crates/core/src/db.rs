@@ -56,14 +56,25 @@ fn ensure_sqlite_parent_dir(url: &str) -> AppResult<()> {
     Ok(())
 }
 
+const MIGRATIONS: &[&str] = &[
+    include_str!("../migrations/001_init.sql"),
+    include_str!("../migrations/002_dialect.sql"),
+];
+
 async fn migrate(pool: &DbPool) -> AppResult<()> {
-    let sql = include_str!("../migrations/001_init.sql");
-    for statement in sql.split(';') {
-        let stmt = statement.trim();
-        if stmt.is_empty() {
-            continue;
+    for sql in MIGRATIONS {
+        for statement in sql.split(';') {
+            let stmt = statement.trim();
+            if stmt.is_empty() {
+                continue;
+            }
+            // SQLite has no `ADD COLUMN IF NOT EXISTS`; re-running an applied ALTER is expected.
+            match sqlx::query(stmt).execute(pool).await {
+                Ok(_) => {}
+                Err(sqlx::Error::Database(e)) if e.message().contains("duplicate column name") => {}
+                Err(e) => return Err(e.into()),
+            }
         }
-        sqlx::query(stmt).execute(pool).await?;
     }
     Ok(())
 }

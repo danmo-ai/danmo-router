@@ -95,7 +95,9 @@ select {
   font: inherit;
 }
 
-input {
+input,
+select,
+textarea {
   border: 1px solid #cbd5e1;
   border-radius: 8px;
   padding: 8px 10px;
@@ -188,4 +190,36 @@ th {
 .actions {
   display: flex;
   gap: 8px;
+}
+
+.form-grid .wide {
+  grid-column: 1 / -1;
+}
+
+.form-grid textarea {
+  font: 13px ui-monospace, SFMono-Regular, Menlo, monospace;
+  min-height: 44px;
+  resize: vertical;
+}
+
+.checkbox {
+  flex-direction: row;
+  align-items: center;
+}
+
+.hint {
+  color: #64748b;
+  font-size: 13px;
+  margin: -4px 0 0;
+}
+
+.status-billing_failed,
+.status-error {
+  color: #b91c1c;
+  font-weight: 600;
+}
+
+td.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
 }

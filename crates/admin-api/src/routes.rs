@@ -8,7 +8,9 @@ use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use axum_extra::extract::cookie::{Cookie, SameSite};
 use danmo_core::billing;
+use danmo_core::protocol::{AuthStyle, Protocol, RelayMode};
 use danmo_core::services::{channel, log as log_svc, session, user as user_svc};
+use danmo_core::usage;
 use danmo_core::AppError;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -20,6 +22,7 @@ pub fn router(state: AdminState) -> Router {
         .route("/api/admin/logout", post(logout))
         .route("/api/admin/me", get(me))
         .route("/api/admin/overview", get(overview))
+        .route("/api/admin/meta", get(meta))
         .route(
             "/api/admin/channels",
             get(list_channels).post(create_channel),
@@ -102,6 +105,28 @@ async fn overview(State(state): State<AdminState>, _admin: AdminUser) -> ApiResu
     Ok(Json(json!({ "success": true, "data": stats })))
 }
 
+/// Names accepted by channel and price fields, so the portal never hardcodes them.
+async fn meta(_admin: AdminUser) -> ApiResult<Json<Value>> {
+    let protocols: Vec<&str> = Protocol::ALL.iter().map(|p| p.as_str()).collect();
+    let usage_adapters: Vec<Value> = usage::ADAPTERS
+        .iter()
+        .map(|a| json!({"name": a.name(), "protocol": a.protocol().as_str()}))
+        .collect();
+    Ok(Json(json!({
+        "success": true,
+        "data": {
+            "protocols": protocols,
+            "relay_modes": [RelayMode::Passthrough.as_str(), RelayMode::Convert.as_str()],
+            "auth_styles": [
+                AuthStyle::Bearer.as_str(),
+                AuthStyle::XApiKey.as_str(),
+                AuthStyle::XGoogApiKey.as_str(),
+            ],
+            "usage_adapters": usage_adapters,
+        }
+    })))
+}
+
 async fn list_channels(
     State(state): State<AdminState>,
     _admin: AdminUser,
@@ -127,8 +152,51 @@ struct ChannelBody {
     weight: i64,
     #[serde(default = "default_enabled")]
     status: String,
+    #[serde(default = "default_relay_mode")]
+    relay_mode: String,
+    #[serde(default = "default_upstream_protocol")]
+    upstream_protocol: String,
+    #[serde(default = "default_auth_style")]
+    auth_style: String,
+    #[serde(default)]
+    model_mapping: String,
+    #[serde(default = "default_true")]
+    inject_stream_usage: bool,
 }
 
+impl ChannelBody {
+    fn into_input(self) -> channel::ChannelInput {
+        channel::ChannelInput {
+            name: self.name,
+            type_: self.type_,
+            key: self.key,
+            base_url: self.base_url,
+            models: self.models,
+            group_name: self.group_name,
+            priority: self.priority,
+            weight: self.weight,
+            status: self.status,
+            relay_mode: self.relay_mode,
+            upstream_protocol: self.upstream_protocol,
+            auth_style: self.auth_style,
+            model_mapping: self.model_mapping,
+            inject_stream_usage: self.inject_stream_usage,
+        }
+    }
+}
+
+fn default_relay_mode() -> String {
+    "passthrough".into()
+}
+fn default_upstream_protocol() -> String {
+    "openai_chat".into()
+}
+fn default_auth_style() -> String {
+    "bearer".into()
+}
+fn default_true() -> bool {
+    true
+}
 fn default_channel_type() -> String {
     "openai_compat".into()
 }
@@ -150,22 +218,8 @@ async fn create_channel(
     if body.key.is_empty() {
         return Err(AppError::BadRequest("key is required".into()).into());
     }
-    let ch = channel::create_channel(
-        &state.pool,
-        &state.config.encryption_key,
-        channel::ChannelInput {
-            name: body.name,
-            type_: body.type_,
-            key: body.key,
-            base_url: body.base_url,
-            models: body.models,
-            group_name: body.group_name,
-            priority: body.priority,
-            weight: body.weight,
-            status: body.status,
-        },
-    )
-    .await?;
+    let ch = channel::create_channel(&state.pool, &state.config.encryption_key, body.into_input())
+        .await?;
     Ok(Json(json!({ "success": true, "data": ch })))
 }
 
@@ -179,17 +233,7 @@ async fn update_channel(
         &state.pool,
         &state.config.encryption_key,
         id,
-        channel::ChannelInput {
-            name: body.name,
-            type_: body.type_,
-            key: body.key,
-            base_url: body.base_url,
-            models: body.models,
-            group_name: body.group_name,
-            priority: body.priority,
-            weight: body.weight,
-            status: body.status,
-        },
+        body.into_input(),
     )
     .await?;
     Ok(Json(json!({ "success": true, "data": ch })))
@@ -311,11 +355,23 @@ async fn list_model_prices(
 struct ModelPriceBody {
     model: String,
     model_ratio: f64,
-    #[serde(default = "default_completion")]
+    #[serde(default = "default_one")]
     completion_ratio: f64,
+    #[serde(default = "default_one")]
+    cache_read_ratio: f64,
+    #[serde(default = "default_one")]
+    cache_write_ratio: f64,
+    #[serde(default)]
+    search_price: f64,
+    #[serde(default)]
+    tiers: String,
+    #[serde(default)]
+    periods: String,
+    #[serde(default)]
+    native_usage: String,
 }
 
-fn default_completion() -> f64 {
+fn default_one() -> f64 {
     1.0
 }
 
@@ -324,13 +380,18 @@ async fn upsert_model_price(
     _admin: AdminUser,
     Json(body): Json<ModelPriceBody>,
 ) -> ApiResult<Json<Value>> {
-    let price = billing::upsert_model_price(
-        &state.pool,
-        &body.model,
-        body.model_ratio,
-        body.completion_ratio,
-    )
-    .await?;
+    let input = billing::ModelPriceInput {
+        model: body.model,
+        model_ratio: body.model_ratio,
+        completion_ratio: body.completion_ratio,
+        cache_read_ratio: body.cache_read_ratio,
+        cache_write_ratio: body.cache_write_ratio,
+        search_price: body.search_price,
+        tiers: body.tiers,
+        periods: body.periods,
+        native_usage: body.native_usage,
+    };
+    let price = billing::upsert_model_price(&state.pool, &input).await?;
     Ok(Json(json!({ "success": true, "data": price })))
 }
 

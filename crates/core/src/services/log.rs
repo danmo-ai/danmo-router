@@ -1,6 +1,7 @@
 use crate::db::DbPool;
 use crate::error::AppResult;
 use crate::models::{LogEntry, OverviewStats};
+use crate::usage::Usage;
 
 #[derive(Debug, Clone)]
 pub struct NewLog {
@@ -13,8 +14,44 @@ pub struct NewLog {
     pub quota: i64,
     pub duration_ms: i64,
     pub status: String,
-    pub estimated: bool,
     pub error: Option<String>,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub reasoning_tokens: i64,
+    pub usage_adapter: String,
+    pub raw_usage: Option<String>,
+}
+
+impl NewLog {
+    pub fn new(user_id: i64, token_id: Option<i64>, model: &str) -> Self {
+        Self {
+            user_id,
+            token_id,
+            channel_id: None,
+            model: model.to_string(),
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            quota: 0,
+            duration_ms: 0,
+            status: String::new(),
+            error: None,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            reasoning_tokens: 0,
+            usage_adapter: String::new(),
+            raw_usage: None,
+        }
+    }
+
+    pub fn with_usage(mut self, usage: &Usage) -> Self {
+        self.prompt_tokens = usage.input_tokens;
+        self.completion_tokens = usage.output_tokens;
+        self.cache_read_tokens = usage.cache_read_tokens;
+        self.cache_write_tokens = usage.cache_write_tokens;
+        self.reasoning_tokens = usage.reasoning_tokens;
+        self.usage_adapter = usage.adapter.clone();
+        self
+    }
 }
 
 pub async fn insert_log(pool: &DbPool, entry: NewLog) -> AppResult<LogEntry> {
@@ -22,8 +59,9 @@ pub async fn insert_log(pool: &DbPool, entry: NewLog) -> AppResult<LogEntry> {
         r#"
         INSERT INTO logs
             (user_id, token_id, channel_id, model, prompt_tokens, completion_tokens,
-             quota, duration_ms, status, estimated, error)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             quota, duration_ms, status, estimated, error,
+             cache_read_tokens, cache_write_tokens, reasoning_tokens, usage_adapter, raw_usage)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(entry.user_id)
@@ -35,8 +73,12 @@ pub async fn insert_log(pool: &DbPool, entry: NewLog) -> AppResult<LogEntry> {
     .bind(entry.quota)
     .bind(entry.duration_ms)
     .bind(&entry.status)
-    .bind(if entry.estimated { 1 } else { 0 })
     .bind(&entry.error)
+    .bind(entry.cache_read_tokens)
+    .bind(entry.cache_write_tokens)
+    .bind(entry.reasoning_tokens)
+    .bind(&entry.usage_adapter)
+    .bind(&entry.raw_usage)
     .execute(pool)
     .await?;
 
