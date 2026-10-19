@@ -1,8 +1,46 @@
 use crate::crypto;
 use crate::db::DbPool;
+use crate::dialect;
 use crate::error::{AppError, AppResult};
-use crate::models::Channel;
+use crate::models::{Channel, ChannelModel};
 use crate::protocol::{AuthStyle, Protocol, RelayMode};
+use serde::{Deserialize, Serialize};
+
+/// One model row of a channel. An empty `upstream_dialect` takes the channel's default.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChannelModelInput {
+    pub model: String,
+    #[serde(default)]
+    pub upstream_model: String,
+    #[serde(default)]
+    pub upstream_dialect: String,
+}
+
+impl ChannelModelInput {
+    pub fn new(model: &str) -> Self {
+        Self {
+            model: model.to_string(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with(model: &str, upstream_model: &str, upstream_dialect: &str) -> Self {
+        Self {
+            model: model.to_string(),
+            upstream_model: upstream_model.to_string(),
+            upstream_dialect: upstream_dialect.to_string(),
+        }
+    }
+
+    /// Rows from a comma-separated model list, each with the channel's default dialect.
+    pub fn list(csv: &str) -> Vec<Self> {
+        csv.split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(Self::new)
+            .collect()
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ChannelInput {
@@ -10,7 +48,7 @@ pub struct ChannelInput {
     pub type_: String,
     pub key: String,
     pub base_url: String,
-    pub models: String,
+    pub models: Vec<ChannelModelInput>,
     pub group_name: String,
     pub priority: i64,
     pub weight: i64,
@@ -18,8 +56,9 @@ pub struct ChannelInput {
     pub relay_mode: String,
     pub upstream_protocol: String,
     pub auth_style: String,
-    pub model_mapping: String,
     pub inject_stream_usage: bool,
+    pub default_dialect: String,
+    pub vendor: String,
 }
 
 impl Default for ChannelInput {
@@ -29,7 +68,7 @@ impl Default for ChannelInput {
             type_: "openai_compat".into(),
             key: String::new(),
             base_url: String::new(),
-            models: String::new(),
+            models: Vec::new(),
             group_name: "default".into(),
             priority: 0,
             weight: 1,
@@ -37,14 +76,16 @@ impl Default for ChannelInput {
             relay_mode: RelayMode::Passthrough.as_str().into(),
             upstream_protocol: Protocol::OpenaiChat.as_str().into(),
             auth_style: AuthStyle::Bearer.as_str().into(),
-            model_mapping: String::new(),
             inject_stream_usage: true,
+            default_dialect: dialect::STANDARD.into(),
+            vendor: String::new(),
         }
     }
 }
 
 impl ChannelInput {
-    fn validate(&self) -> AppResult<()> {
+    /// Validates the input and returns the model rows with names trimmed and dialects resolved.
+    fn validate(&self) -> AppResult<Vec<ChannelModelInput>> {
         if RelayMode::parse(&self.relay_mode).is_none() {
             return Err(AppError::BadRequest(format!(
                 "invalid relay_mode '{}'",
@@ -68,20 +109,47 @@ impl ChannelInput {
                 self.auth_style
             )));
         }
-        let mapping = self.model_mapping.trim();
-        if !mapping.is_empty() {
-            let parsed: serde_json::Map<String, serde_json::Value> = serde_json::from_str(mapping)
-                .map_err(|e| {
-                    AppError::BadRequest(format!("model_mapping must be a JSON object: {e}"))
-                })?;
-            if parsed.values().any(|v| !v.is_string()) {
-                return Err(AppError::BadRequest(
-                    "model_mapping values must be strings".into(),
-                ));
+        let default = match self.default_dialect.trim() {
+            "" => dialect::STANDARD,
+            d => d,
+        };
+        dialect::validate(protocol, default)?;
+
+        let mut rows: Vec<ChannelModelInput> = Vec::with_capacity(self.models.len());
+        for m in &self.models {
+            let model = m.model.trim();
+            if model.is_empty() {
+                continue;
             }
+            if rows.iter().any(|r| r.model == model) {
+                return Err(AppError::BadRequest(format!("duplicate model '{model}'")));
+            }
+            let d = match m.upstream_dialect.trim() {
+                "" => default,
+                d => d,
+            };
+            dialect::validate(protocol, d)?;
+            let upstream = m.upstream_model.trim();
+            rows.push(ChannelModelInput {
+                model: model.to_string(),
+                upstream_model: if upstream == model {
+                    String::new()
+                } else {
+                    upstream.to_string()
+                },
+                upstream_dialect: d.to_string(),
+            });
         }
-        Ok(())
+        Ok(rows)
     }
+}
+
+/// A channel with its model rows, as shown to admins.
+#[derive(Debug, Clone, Serialize)]
+pub struct ChannelView {
+    #[serde(flatten)]
+    pub channel: Channel,
+    pub models: Vec<ChannelModel>,
 }
 
 pub async fn create_channel(
@@ -89,13 +157,15 @@ pub async fn create_channel(
     enc_key: &[u8; 32],
     input: ChannelInput,
 ) -> AppResult<Channel> {
-    input.validate()?;
+    let rows = input.validate()?;
     let key_enc = crypto::encrypt_secret(enc_key, &input.key).map_err(AppError::Other)?;
+    let mut tx = pool.begin().await?;
     let result = sqlx::query(
         r#"
         INSERT INTO channels
-            (name, type, key_enc, base_url, models, group_name, priority, weight, status,
-             relay_mode, upstream_protocol, auth_style, model_mapping, inject_stream_usage)
+            (name, type, key_enc, base_url, group_name, priority, weight, status,
+             relay_mode, upstream_protocol, auth_style, inject_stream_usage,
+             default_dialect, vendor)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
@@ -103,7 +173,6 @@ pub async fn create_channel(
     .bind(&input.type_)
     .bind(&key_enc)
     .bind(input.base_url.trim_end_matches('/'))
-    .bind(&input.models)
     .bind(&input.group_name)
     .bind(input.priority)
     .bind(input.weight.max(1))
@@ -111,13 +180,15 @@ pub async fn create_channel(
     .bind(&input.relay_mode)
     .bind(&input.upstream_protocol)
     .bind(&input.auth_style)
-    .bind(input.model_mapping.trim())
     .bind(i64::from(input.inject_stream_usage))
-    .execute(pool)
+    .bind(default_dialect(&input))
+    .bind(input.vendor.trim())
+    .execute(&mut *tx)
     .await?;
 
     let id = result.last_insert_rowid();
-    rebuild_abilities(pool, id, &input.group_name, &input.models).await?;
+    write_models(&mut tx, id, &input.group_name, &rows).await?;
+    tx.commit().await?;
     get_by_id(pool, id).await
 }
 
@@ -127,7 +198,7 @@ pub async fn update_channel(
     id: i64,
     input: ChannelInput,
 ) -> AppResult<Channel> {
-    input.validate()?;
+    let rows = input.validate()?;
     let existing = get_by_id(pool, id).await?;
     let key_enc = if input.key.is_empty() {
         existing.key_enc
@@ -135,13 +206,14 @@ pub async fn update_channel(
         crypto::encrypt_secret(enc_key, &input.key).map_err(AppError::Other)?
     };
 
+    let mut tx = pool.begin().await?;
     sqlx::query(
         r#"
         UPDATE channels SET
-            name = ?, type = ?, key_enc = ?, base_url = ?, models = ?,
+            name = ?, type = ?, key_enc = ?, base_url = ?,
             group_name = ?, priority = ?, weight = ?, status = ?,
-            relay_mode = ?, upstream_protocol = ?, auth_style = ?, model_mapping = ?,
-            inject_stream_usage = ?,
+            relay_mode = ?, upstream_protocol = ?, auth_style = ?,
+            inject_stream_usage = ?, default_dialect = ?, vendor = ?,
             updated_at = datetime('now')
         WHERE id = ?
         "#,
@@ -150,7 +222,6 @@ pub async fn update_channel(
     .bind(&input.type_)
     .bind(&key_enc)
     .bind(input.base_url.trim_end_matches('/'))
-    .bind(&input.models)
     .bind(&input.group_name)
     .bind(input.priority)
     .bind(input.weight.max(1))
@@ -158,14 +229,23 @@ pub async fn update_channel(
     .bind(&input.relay_mode)
     .bind(&input.upstream_protocol)
     .bind(&input.auth_style)
-    .bind(input.model_mapping.trim())
     .bind(i64::from(input.inject_stream_usage))
+    .bind(default_dialect(&input))
+    .bind(input.vendor.trim())
     .bind(id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
-    rebuild_abilities(pool, id, &input.group_name, &input.models).await?;
+    write_models(&mut tx, id, &input.group_name, &rows).await?;
+    tx.commit().await?;
     get_by_id(pool, id).await
+}
+
+fn default_dialect(input: &ChannelInput) -> &str {
+    match input.default_dialect.trim() {
+        "" => dialect::STANDARD,
+        d => d,
+    }
 }
 
 pub async fn set_status(pool: &DbPool, id: i64, status: &str) -> AppResult<Channel> {
@@ -178,14 +258,18 @@ pub async fn set_status(pool: &DbPool, id: i64, status: &str) -> AppResult<Chann
 }
 
 pub async fn delete_channel(pool: &DbPool, id: i64) -> AppResult<()> {
-    sqlx::query("DELETE FROM abilities WHERE channel_id = ?")
-        .bind(id)
-        .execute(pool)
-        .await?;
+    let mut tx = pool.begin().await?;
+    for table in ["abilities", "channel_models"] {
+        sqlx::query(&format!("DELETE FROM {table} WHERE channel_id = ?"))
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
     sqlx::query("DELETE FROM channels WHERE id = ?")
         .bind(id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -205,29 +289,73 @@ pub async fn list_channels(pool: &DbPool) -> AppResult<Vec<Channel>> {
     )
 }
 
+pub async fn list_models(pool: &DbPool, channel_id: i64) -> AppResult<Vec<ChannelModel>> {
+    Ok(
+        sqlx::query_as("SELECT * FROM channel_models WHERE channel_id = ? ORDER BY id")
+            .bind(channel_id)
+            .fetch_all(pool)
+            .await?,
+    )
+}
+
+pub async fn get_view(pool: &DbPool, id: i64) -> AppResult<ChannelView> {
+    let channel = get_by_id(pool, id).await?;
+    let models = list_models(pool, id).await?;
+    Ok(ChannelView { channel, models })
+}
+
+pub async fn list_views(pool: &DbPool) -> AppResult<Vec<ChannelView>> {
+    let channels = list_channels(pool).await?;
+    let rows: Vec<ChannelModel> = sqlx::query_as("SELECT * FROM channel_models ORDER BY id")
+        .fetch_all(pool)
+        .await?;
+    Ok(channels
+        .into_iter()
+        .map(|channel| {
+            let models = rows
+                .iter()
+                .filter(|r| r.channel_id == channel.id)
+                .cloned()
+                .collect();
+            ChannelView { channel, models }
+        })
+        .collect())
+}
+
 pub async fn decrypt_channel_key(enc_key: &[u8; 32], channel: &Channel) -> AppResult<String> {
     crypto::decrypt_secret(enc_key, &channel.key_enc).map_err(AppError::Other)
 }
 
-async fn rebuild_abilities(
-    pool: &DbPool,
+/// Replaces the channel's model rows and rebuilds its abilities from them.
+async fn write_models(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     channel_id: i64,
     group_name: &str,
-    models: &str,
+    rows: &[ChannelModelInput],
 ) -> AppResult<()> {
-    sqlx::query("DELETE FROM abilities WHERE channel_id = ?")
+    for table in ["abilities", "channel_models"] {
+        sqlx::query(&format!("DELETE FROM {table} WHERE channel_id = ?"))
+            .bind(channel_id)
+            .execute(&mut **tx)
+            .await?;
+    }
+    for row in rows {
+        sqlx::query(
+            "INSERT INTO channel_models (channel_id, model, upstream_model, upstream_dialect) VALUES (?, ?, ?, ?)",
+        )
         .bind(channel_id)
-        .execute(pool)
+        .bind(&row.model)
+        .bind(&row.upstream_model)
+        .bind(&row.upstream_dialect)
+        .execute(&mut **tx)
         .await?;
-
-    for model in models.split(',').map(str::trim).filter(|s| !s.is_empty()) {
         sqlx::query(
             "INSERT OR IGNORE INTO abilities (channel_id, group_name, model) VALUES (?, ?, ?)",
         )
         .bind(channel_id)
         .bind(group_name)
-        .bind(model)
-        .execute(pool)
+        .bind(&row.model)
+        .execute(&mut **tx)
         .await?;
     }
     Ok(())
