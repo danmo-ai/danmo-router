@@ -34,8 +34,10 @@ User UI  ──────► danmo-user
 | `POST /v1/messages` | `anthropic_messages` |
 | `POST /v1/embeddings` | `embeddings` |
 | `POST /v1beta/models/{model}:generateContent` | `gemini` |
-| `POST /v1beta/models/{model}:streamGenerateContent` | `gemini`（流式） |
+| `POST /v1beta/models/{model}:streamGenerateContent` | `gemini` |
 | `GET /v1/models` | 令牌可见的模型列表 |
+
+Chat、Responses、Messages 都支持流式，开关在请求体的 `stream` 字段，路径不变。Gemini 把非流式和流式分成 `:generateContent` 与 `:streamGenerateContent` 两个路径。Embeddings 只有非流式。四种对话协议的流都可以互相转换。
 
 渠道的 `upstream_protocol` 是上游实际提供的协议。同一厂商的不同协议使用不同 base URL，因此是不同渠道。`relay_mode` 决定渠道能否服务其他协议：`passthrough` 只服务同协议，`convert` 还可以在四种对话协议之间转换。Embeddings 只能透传。同协议内的方言转换不受 `relay_mode` 限制。
 

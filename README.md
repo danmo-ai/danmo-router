@@ -36,8 +36,10 @@ User UI  ──────► danmo-user  × 1..N
 | `POST /v1/messages` | Anthropic Messages |
 | `POST /v1/embeddings` | Embeddings |
 | `POST /v1beta/models/{model}:generateContent` | Gemini |
-| `POST /v1beta/models/{model}:streamGenerateContent` | Gemini 流式 |
+| `POST /v1beta/models/{model}:streamGenerateContent` | Gemini |
 | `GET /v1/models` | 模型列表 |
+
+Chat、Responses、Messages 在同一条路径上流式返回，请求体里 `stream: true`。Gemini 的流式是另一个路径。Embeddings 只有非流式。
 
 完整的方言列表、转发判定、数据模型和计费公式见 [系统架构](docs/architecture.md)。
 
