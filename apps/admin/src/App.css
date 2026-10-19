@@ -223,3 +223,27 @@ td.mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
 }
+
+table.rows {
+  border: 1px solid #e2e8f0;
+}
+
+table.rows td {
+  padding: 6px 8px;
+  vertical-align: middle;
+}
+
+table.rows input,
+table.rows select {
+  width: 100%;
+}
+
+.row-add {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.row-add input {
+  flex: 1;
+}
