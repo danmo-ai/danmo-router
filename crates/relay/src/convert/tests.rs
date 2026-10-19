@@ -626,3 +626,11 @@ fn chat_encoder_omits_usage_chunk_unless_requested() {
     assert!(!text.contains("\"usage\""), "{text}");
     assert!(text.ends_with("data: [DONE]\n\n"));
 }
+
+#[test]
+fn chat_stream_reads_reasoning_details_deltas() {
+    let mut d = chat::Decoder::default();
+    let events = d.event(&json!({"id": "c", "choices": [{"index": 0, "delta": {
+        "reasoning_details": [{"type": "reasoning.text", "text": "plan"}]}}]}));
+    assert!(events.contains(&Event::Reasoning("plan".into())));
+}

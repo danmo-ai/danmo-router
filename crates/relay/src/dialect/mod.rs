@@ -150,13 +150,12 @@ fn is_off(req: &ir::Request) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+mod tests;
 
-    #[test]
-    fn every_registered_dialect_has_its_codec() {
-        for d in registry::DIALECTS {
-            assert_eq!(codec(d).spec().id(), d.id());
-        }
+#[cfg(test)]
+#[test]
+fn every_registered_dialect_has_its_codec() {
+    for d in registry::DIALECTS {
+        assert_eq!(codec(d).spec().id(), d.id());
     }
 }
