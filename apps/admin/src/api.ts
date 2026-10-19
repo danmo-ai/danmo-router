@@ -20,6 +20,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return json.data as T
 }
 
+export type Meta = {
+  protocols: string[]
+  relay_modes: string[]
+  auth_styles: string[]
+  usage_adapters: { name: string; protocol: string }[]
+}
+
 export const api = {
   login: (username: string, password: string) =>
     request('/api/admin/login', {
@@ -29,6 +36,7 @@ export const api = {
   logout: () => request('/api/admin/logout', { method: 'POST' }),
   me: () => request<any>('/api/admin/me'),
   overview: () => request<any>('/api/admin/overview'),
+  meta: () => request<Meta>('/api/admin/meta'),
   channels: () => request<any[]>('/api/admin/channels'),
   createChannel: (body: any) =>
     request('/api/admin/channels', { method: 'POST', body: JSON.stringify(body) }),

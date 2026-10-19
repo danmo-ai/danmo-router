@@ -8,6 +8,8 @@ use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use axum_extra::extract::cookie::{Cookie, SameSite};
 use danmo_core::billing;
+use danmo_core::protocol::{AuthStyle, Protocol, RelayMode};
+use danmo_core::usage;
 use danmo_core::services::{channel, log as log_svc, session, user as user_svc};
 use danmo_core::AppError;
 use serde::Deserialize;
@@ -20,6 +22,7 @@ pub fn router(state: AdminState) -> Router {
         .route("/api/admin/logout", post(logout))
         .route("/api/admin/me", get(me))
         .route("/api/admin/overview", get(overview))
+        .route("/api/admin/meta", get(meta))
         .route(
             "/api/admin/channels",
             get(list_channels).post(create_channel),
@@ -100,6 +103,28 @@ async fn me(AdminUser(user): AdminUser) -> ApiResult<Json<Value>> {
 async fn overview(State(state): State<AdminState>, _admin: AdminUser) -> ApiResult<Json<Value>> {
     let stats = log_svc::overview(&state.pool).await?;
     Ok(Json(json!({ "success": true, "data": stats })))
+}
+
+/// Names accepted by channel and price fields, so the portal never hardcodes them.
+async fn meta(_admin: AdminUser) -> ApiResult<Json<Value>> {
+    let protocols: Vec<&str> = Protocol::ALL.iter().map(|p| p.as_str()).collect();
+    let usage_adapters: Vec<Value> = usage::ADAPTERS
+        .iter()
+        .map(|a| json!({"name": a.name(), "protocol": a.protocol().as_str()}))
+        .collect();
+    Ok(Json(json!({
+        "success": true,
+        "data": {
+            "protocols": protocols,
+            "relay_modes": [RelayMode::Passthrough.as_str(), RelayMode::Convert.as_str()],
+            "auth_styles": [
+                AuthStyle::Bearer.as_str(),
+                AuthStyle::XApiKey.as_str(),
+                AuthStyle::XGoogApiKey.as_str(),
+            ],
+            "usage_adapters": usage_adapters,
+        }
+    })))
 }
 
 async fn list_channels(
