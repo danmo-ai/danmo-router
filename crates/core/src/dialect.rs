@@ -19,6 +19,7 @@ pub struct Dialect {
     pub protocol: Protocol,
     pub name: &'static str,
     /// Usage field sets this spec reports; the first renders usage for clients of the dialect.
+    /// Vendor field sets extend the OpenAI Chat one, so a single entry covers a whole family.
     pub usage: &'static [&'static str],
     /// Unknown spec, e.g. an aggregator: only same-protocol passthrough, usage by feature match.
     pub opaque: bool,
@@ -58,7 +59,7 @@ pub static DIALECTS: &[Dialect] = &[
     d(
         OpenaiChat,
         "thinking",
-        &["deepseek_chat", "openai_chat"],
+        &["deepseek_chat"],
         "DeepSeek / Ark / GLM: thinking.type + reasoning_effort",
     ),
     d(
@@ -70,19 +71,19 @@ pub static DIALECTS: &[Dialect] = &[
     d(
         OpenaiChat,
         "kimi",
-        &["kimi_chat", "openai_chat"],
+        &["kimi_chat"],
         "Kimi: thinking.type + reasoning_effort",
     ),
     d(
         OpenaiChat,
         "qianfan",
-        &["qianfan_chat", "openai_chat"],
+        &["qianfan_chat"],
         "Qianfan DeepSeek/GLM/Kimi: thinking.type + thinking_budget",
     ),
     d(
         OpenaiChat,
         "qianfan_ernie",
-        &["qianfan_chat", "openai_chat"],
+        &["qianfan_chat"],
         "Qianfan ERNIE/Qwen3: enable_thinking + thinking_strategy",
     ),
     d(
@@ -251,14 +252,19 @@ mod tests {
     }
 
     #[test]
-    fn render_prefers_parsed_set_within_spec() {
+    fn render_uses_the_spec_field_set() {
         let thinking = find(OpenaiChat, "thinking").unwrap();
         assert_eq!(thinking.render_for("deepseek_chat").name(), "deepseek_chat");
-        assert_eq!(thinking.render_for("openai_chat").name(), "openai_chat");
-        assert_eq!(thinking.render_for("qianfan_chat").name(), "deepseek_chat");
+        assert_eq!(thinking.render_for("openai_chat").name(), "deepseek_chat");
         assert_eq!(
             standard(OpenaiChat).render_for("qianfan_chat").name(),
             "openai_chat"
+        );
+        assert_eq!(
+            standard(AnthropicMessages)
+                .render_for("deepseek_chat")
+                .name(),
+            "anthropic_messages"
         );
     }
 
