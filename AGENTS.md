@@ -6,18 +6,24 @@
 
 ```text
 crates/core/migrations/
-  sqlite/     # 当前已实现
-  mysql/      # 即将支持；与 sqlite 同序号语义，方言独立编写
+  sqlite/     # 单机默认
+  mysql/      # 多实例部署（MySQL 8 / MariaDB 10.5+）；与 sqlite 同序号语义，方言独立编写
   README.md
 ```
 
 ### 硬规则
 
 1. **每次 schema 变更必须新增** `NNN_snake_case.sql`（三位序号递增）。**禁止修改**已合入、可能已被生产应用的旧迁移文件。
-2. 当前引擎为 **SQLite**：新增文件放在 `migrations/sqlite/`，并在 [`crates/core/src/db.rs`](crates/core/src/db.rs) 的 `SQLITE_MIGRATIONS` 列表中登记（顺序 = 版本号）。
-3. **MySQL（进行中）**：同一逻辑变更在 `migrations/mysql/` 增加**同号或同语义**的 SQL（方言可不同：`AUTO_INCREMENT`、类型、引号等），待 `mysql://` 连接接通后由对应列表加载。在 MySQL 未接通前，仍须为 sqlite 写完并跑通测试；mysql 侧可先落文件。
+2. **两个引擎都要写**：同号文件分别放在 `migrations/sqlite/` 与 `migrations/mysql/`，并在 [`crates/core/src/db/sqlite.rs`](crates/core/src/db/sqlite.rs) 与 [`crates/core/src/db/mysql.rs`](crates/core/src/db/mysql.rs) 的 `MIGRATIONS` 列表中登记（顺序 = 版本号）。
+3. MySQL DDL 约定见 [`crates/core/migrations/mysql/README.md`](crates/core/migrations/mysql/README.md)：文本列用 `VARCHAR` 不用 `TEXT`，时间列由 Rust 绑定 `db::now()`，表尾 `utf8mb4_bin`。
 4. 勿在 shell 部署脚本里手写「全量建表」绕过 `schema_migrations`。增量只由进程启动时的 `migrate()` 应用。
-5. 改迁移后运行相关测试（至少 `cargo test -p danmo-core`）。
+5. 改迁移后运行相关测试（至少 `cargo test -p danmo-core`）；再设置 `DANMO_TEST_MYSQL_URL=mysql://root:pass@127.0.0.1:3306` 跑一遍 MySQL（CI `mysql` job 同样会跑）。
+
+### 业务 SQL
+
+- 业务代码写**两种引擎都能跑**的 SQL（`?` 占位、`sqlx::Any`）。方言差异只放进 `SqlEngine` 钩子（`db/mod.rs` 定义，`db/sqlite.rs` / `db/mysql.rs` 只覆盖不同的部分）：`returning_id` + `db::insert_id`、`insert_ignore`、`upsert`、`lock_rows`、`begin_write`。
+- 不要用 `datetime('now')` 等引擎函数；时间绑定 `db::now()` / `db::time_ago()` / `db::today()`。
+- 不要在业务代码里按引擎名分支；需要新差异就给 `SqlEngine` 加方法。
 
 ### 不要做的事
 
