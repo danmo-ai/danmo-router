@@ -410,7 +410,7 @@ dependencies = [
 
 [[package]]
 name = "danmo-admin-api"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "axum",
  "axum-extra",
@@ -425,7 +425,7 @@ dependencies = [
 
 [[package]]
 name = "danmo-core"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -448,7 +448,7 @@ dependencies = [
 
 [[package]]
 name = "danmo-relay"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -470,7 +470,7 @@ dependencies = [
 
 [[package]]
 name = "danmo-server"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -493,7 +493,7 @@ dependencies = [
 
 [[package]]
 name = "danmo-user-api"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "axum",
  "axum-extra",
