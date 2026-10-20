@@ -13,7 +13,7 @@ ADMIN_PORT ?= 3001
 USER_PORT ?= 3002
 
 .PHONY: help check fmt fmt-check clippy test build release \
-	run-relay run-admin run-user run-all-in-one \
+	run-relay run-admin run-user run-admin-api run-user-api run-all-in-one \
 	portals-install portals-build portals-dev-admin portals-dev-user \
 	package clean
 
@@ -47,11 +47,17 @@ release: ## Release binaries
 run-relay: ## Relay :3000
 	PORT=$(RELAY_PORT) $(CARGO) run -p danmo-server --bin danmo-relay
 
-run-admin: ## Admin API :3001
+run-admin-api: ## Admin API only :3001
 	PORT=$(ADMIN_PORT) $(CARGO) run -p danmo-server --bin danmo-admin
 
-run-user: ## User API :3002
+run-user-api: ## User API only :3002
 	PORT=$(USER_PORT) $(CARGO) run -p danmo-server --bin danmo-user
+
+run-admin: ## Admin API :3001 + Portal :5173
+	$(MAKE) -j2 run-admin-api portals-dev-admin
+
+run-user: ## User API :3002 + Portal :5174
+	$(MAKE) -j2 run-user-api portals-dev-user
 
 run-all-in-one: ## Monolith (local only)
 	PORT=$(RELAY_PORT) $(CARGO) run -p danmo-server --bin danmo-router
@@ -63,10 +69,10 @@ portals-install: ## npm ci (admin + user)
 portals-build: ## Production Portal builds
 	@for p in $(PORTALS); do (cd apps/$$p && $(NPM) ci && $(NPM) run build); done
 
-portals-dev-admin: ## Admin Portal :5173
+portals-dev-admin: ## Admin Portal only :5173
 	cd apps/admin && $(NPM) run dev
 
-portals-dev-user: ## User Portal :5174
+portals-dev-user: ## User Portal only :5174
 	cd apps/user && $(NPM) run dev
 
 ## Dist

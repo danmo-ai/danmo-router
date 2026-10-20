@@ -85,25 +85,21 @@ make help              # 全部目标
 make check             # fmt + clippy + test（对齐 CI）
 make release           # 编译二进制
 make package           # dist/ + dist/packages/（含 Portal 与 deploy）
-make run-relay|admin|user
-make portals-dev-admin # :5173
-make portals-dev-user  # :5174
+make run-relay         # 仅转发 :3000
+make run-admin         # 管理 API :3001 + Portal :5173
+make run-user          # 用户 API :3002 + Portal :5174
 ```
 
 ## 本地开发
 
 ```bash
 cp .env.example .env
+make portals-install   # 首次
 
-# 三个终端
+# 三个终端即可（admin/user 已带前端）
 make run-relay
-make run-admin
-make run-user
-
-# Portal
-make portals-install
-make portals-dev-admin   # http://localhost:5173 → :3001
-make portals-dev-user    # http://localhost:5174 → :3002
+make run-admin         # http://localhost:5173 → :3001
+make run-user          # http://localhost:5174 → :3002
 ```
 
 要在界面里看到渠道、用户和调用记录，把 `.env` 里的 `SEED_DEMO` 设为 `1` 后再启动。详见下一节。

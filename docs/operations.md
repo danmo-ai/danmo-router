@@ -441,7 +441,9 @@ cp /path/to/danmo.db /backup/danmo-$(date +%F).db
 make help
 make check            # fmt + clippy + test
 make package          # dist/ + packages/（二进制、Portal、deploy）
-make run-relay|admin|user
+make run-relay        # :3000
+make run-admin        # API :3001 + Portal :5173
+make run-user         # API :3002 + Portal :5174
 ```
 
 ---
