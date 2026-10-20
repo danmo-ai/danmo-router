@@ -40,13 +40,15 @@ sudo ./deploy/scripts/install.sh --role=relay --prefix=/opt/danmo-relay --skip-n
 | `/etc/danmo/installs.d/<role>.conf` | 同机多角色时按 `--role=` 选用 |
 
 ```bash
-# 解压后进入包根目录；--from-dir 默认为「本脚本所在发布包根」
-cd /tmp/danmo-router-vX-…   # wget + tar 出来的目录
+cd /tmp
+wget https://github.com/danmo-ai/danmo-router/releases/download/vX.Y.Z/danmo-router-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
+tar -xzf danmo-router-vX.Y.Z-*.tar.gz
+cd danmo-router-vX.Y.Z-*
 sudo ./deploy/scripts/upgrade.sh
-# prefix/role 来自 /etc/danmo/install.conf
+# --from-dir 默认=本解压根；PREFIX/ROLE 读 /etc/danmo/install.conf
 
-# 覆盖或同机多套 / 脚本不在包内时：
-sudo ./deploy/scripts/upgrade.sh --from-dir=/tmp/danmo-vX --prefix=/opt/danmo-user --role=user
+# 同机多套或覆盖：
+sudo ./deploy/scripts/upgrade.sh --prefix=/opt/danmo-user --role=user
 ```
 
 停服务 → 备份并替换二进制/Portal → 启动；**仅应用未登记的增量 SQL**（`schema_migrations`）。

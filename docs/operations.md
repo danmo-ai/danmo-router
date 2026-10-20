@@ -40,7 +40,7 @@ User UI  ──────► danmo-user
 - [ ] `SEED_DEMO=0`（生产禁止示例数据）
 - [ ] `ENCRYPTION_KEY` 为随机 64 位十六进制（32 字节），**所有进程一致**；勿使用 `.env.example` 默认值
 - [ ] `ADMIN_USERNAME` / `ADMIN_PASSWORD` 已修改；管理 API 仅内网或 VPN 可达
-- [ ] `DATABASE_URL` 指向持久化路径或计划中的 Postgres（当前代码仍仅支持 SQLite）
+- [ ] `DATABASE_URL` 指向持久化路径（当前 **sqlite://**；`mysql://` 即将支持，见 `migrations/mysql/`）
 - [ ] `CORS_ORIGINS` 为 Portal 真实域名（逗号分隔，勿误用 `*` 与凭证 Cookie 组合）
 - [ ] `PUBLIC_RELAY_URL` 设为用户中心展示的 API 根（含 `/v1`，如 `https://api.example.com/v1`）
 - [ ] 构建 Portal 时按需设置 `VITE_COMPLIANCE_URL`（默认链到仓库 [compliance.md](compliance.md)；自托管时指向你的合规页 URL）
@@ -373,7 +373,19 @@ GET /healthz
 ## 升级与数据库迁移
 
 1. **备份数据库**（见下一节）。
-2. 推荐：`sudo deploy/scripts/upgrade.sh --from-dir=<解压的新版本> --prefix=/opt/danmo --role=…`。手工滚动时顺序建议 **admin/user → relay**。
+2. 推荐流程（任意目录下载解压即可）：
+
+```bash
+cd /tmp
+wget https://github.com/danmo-ai/danmo-router/releases/download/vX.Y.Z/danmo-router-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
+tar -xzf danmo-router-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
+cd danmo-router-vX.Y.Z-x86_64-unknown-linux-gnu
+sudo ./deploy/scripts/upgrade.sh
+# --from-dir 默认为当前解压根；安装目标读 /etc/danmo/install.conf
+```
+
+手工滚动时顺序建议 **admin/user → relay**。
+
 3. **不要**用脚本重跑全部 SQL。进程启动时对当前引擎目录（现 **sqlite**）只应用 `schema_migrations` 中尚未记录的版本；MySQL 接通后加载 `migrations/mysql/`。
 4. 观察日志 `applied migration N`；失败则回滚二进制与库文件。
 

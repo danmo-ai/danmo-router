@@ -128,13 +128,13 @@ make run-all-in-one
 
 ## 生产部署（拆分）
 
-步骤、Nginx 示例（`deploy/examples/`）、systemd、健康检查与升级备份见 **[docs/operations.md](docs/operations.md)**。简要：
+步骤、Nginx、`install.sh` / `upgrade.sh`、健康检查与升级备份见 **[docs/operations.md](docs/operations.md)** 与 **[deploy/README.md](deploy/README.md)**。简要：
 
-1. `make package` 或 GitHub Release 产物  
-2. 三组进程共用 `DATABASE_URL`、`ENCRYPTION_KEY`  
-3. `api.example.com` → relay（流式需 `proxy_buffering off`）；admin/user API 与 Portal 分域名  
-4. `CORS_ORIGINS`、`PUBLIC_RELAY_URL` 按真实域名配置  
-5. 构建 Portal 时可设 `VITE_COMPLIANCE_URL` 指向自托管的 [合规说明](docs/compliance.md)（默认链到 GitHub 文档）；页脚与登录页会展示链接  
+1. GitHub Release 主 tar（含二进制 + Portal + `deploy/`）或 `make package`  
+2. `sudo ./deploy/scripts/install.sh`（写入 `/etc/danmo/install.conf`）  
+3. 三组进程共用 `DATABASE_URL`、`ENCRYPTION_KEY`；`api` → relay（流式 `proxy_buffering off`）  
+4. `CORS_ORIGINS`、`PUBLIC_RELAY_URL` 按真实域名；可选 `VITE_COMPLIANCE_URL`  
+5. 升级：解压新版本后在包内 `sudo ./deploy/scripts/upgrade.sh`  
 
 ## CI / Release
 

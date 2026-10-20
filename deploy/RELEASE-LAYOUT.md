@@ -23,5 +23,6 @@ danmo-router-v0.3.1-x86_64-unknown-linux-gnu/
 
 ```bash
 sudo ./deploy/scripts/install.sh --role=all --prefix=/opt/danmo
-sudo ./deploy/scripts/upgrade.sh --from-dir=. --prefix=/opt/danmo --role=all
+# 之后升级：在新解压目录内
+sudo ./deploy/scripts/upgrade.sh
 ```
