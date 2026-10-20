@@ -1,8 +1,17 @@
 #!/usr/bin/env bash
 # Upgrade in place: stop → replace binaries/Portal → start.
 # Incremental SQL is applied by the process via schema_migrations (do not re-run full DDL here).
+#
+# Install directory: not hard-coded. Resolution order:
+#   1. --prefix= / --role= / --config= on the CLI
+#   2. --config=FILE or /etc/danmo/install.conf (written by install.sh)
+#   3. /etc/danmo/installs.d/<role>.conf when --role= is set
+#   4. PREFIX/danmo-install.conf when --prefix= is set
+#   5. fallback PREFIX=/opt/danmo ROLE=all
+#
 # Usage:
-#   sudo ./upgrade.sh --from-dir=/path/to/extracted-release --prefix=/opt/danmo --role=all
+#   sudo ./upgrade.sh --from-dir=/path/to/extracted-release
+#   sudo ./upgrade.sh --from-dir=... --prefix=/opt/danmo-user --role=user
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,30 +25,44 @@ info() { echo -e "${GREEN}==>${NC} $*"; }
 warn() { echo -e "${YELLOW}==>${NC} $*"; }
 err() { echo -e "${RED}==>${NC} $*" >&2; }
 
-ROLE=all
-PREFIX=/opt/danmo
+ROLE=""
+PREFIX=""
 FROM_DIR=""
+CONFIG_FILE=""
 SKIP_NGINX=1
 BACKUP_DIR=""
+INSTALL_STATE_DIR=/etc/danmo
+CLI_PREFIX=""
+CLI_ROLE=""
+API_DOMAIN=""
+ADMIN_DOMAIN=""
+USER_DOMAIN=""
 
 usage() {
   cat <<EOF
 Usage: sudo $0 --from-dir=DIR [options]
 
-  --from-dir=DIR                Extracted release tree (contains binaries and/or apps/)
-  --prefix=DIR                  Install root (default: /opt/danmo)
-  --role=all|relay|admin|user   Components on this host (default: all)
+  --from-dir=DIR                Extracted release tree (required)
+  --prefix=DIR                  Install root (default: from install.conf, else /opt/danmo)
+  --role=all|relay|admin|user   Components (default: from install.conf, else all)
+  --config=FILE                 Install state file (default: ${INSTALL_STATE_DIR}/install.conf)
   --with-nginx                  Also re-run install.sh --nginx-only (rare)
   --backup-dir=DIR              Backup previous bin/apps (default: PREFIX/.upgrade-backup-TIMESTAMP)
   -h, --help
+
+install.sh writes:
+  \${PREFIX}/danmo-install.conf
+  ${INSTALL_STATE_DIR}/install.conf
+  ${INSTALL_STATE_DIR}/installs.d/<role>.conf
 EOF
 }
 
 for arg in "$@"; do
   case "$arg" in
     --from-dir=*) FROM_DIR="${arg#*=}" ;;
-    --prefix=*) PREFIX="${arg#*=}" ;;
-    --role=*) ROLE="${arg#*=}" ;;
+    --prefix=*) CLI_PREFIX="${arg#*=}" ;;
+    --role=*) CLI_ROLE="${arg#*=}" ;;
+    --config=*) CONFIG_FILE="${arg#*=}" ;;
     --with-nginx) SKIP_NGINX=0 ;;
     --backup-dir=*) BACKUP_DIR="${arg#*=}" ;;
     -h|--help) usage; exit 0 ;;
@@ -57,20 +80,67 @@ if [[ -z "${FROM_DIR}" || ! -d "${FROM_DIR}" ]]; then
   exit 1
 fi
 
-case "$ROLE" in
-  all|relay|admin|user) ;;
-  *) err "Invalid --role"; exit 1 ;;
-esac
+load_conf() {
+  local f="$1"
+  [[ -f "$f" ]] || return 1
+  # shellcheck disable=SC1090
+  set -a
+  # shellcheck disable=SC1090
+  source "$f"
+  set +a
+  info "Loaded install state from $f"
+  return 0
+}
 
-INSTALL_RELAY=0
-INSTALL_ADMIN=0
-INSTALL_USER=0
-case "$ROLE" in
-  all) INSTALL_RELAY=1; INSTALL_ADMIN=1; INSTALL_USER=1 ;;
-  relay) INSTALL_RELAY=1 ;;
-  admin) INSTALL_ADMIN=1 ;;
-  user) INSTALL_USER=1 ;;
-esac
+set_components_from_role() {
+  INSTALL_RELAY=0
+  INSTALL_ADMIN=0
+  INSTALL_USER=0
+  case "$ROLE" in
+    all) INSTALL_RELAY=1; INSTALL_ADMIN=1; INSTALL_USER=1 ;;
+    relay) INSTALL_RELAY=1 ;;
+    admin) INSTALL_ADMIN=1 ;;
+    user) INSTALL_USER=1 ;;
+    *) err "Invalid role=${ROLE}"; exit 1 ;;
+  esac
+}
+
+# Defaults, then install.conf, then CLI overrides.
+PREFIX=/opt/danmo
+ROLE=all
+INSTALL_RELAY=1
+INSTALL_ADMIN=1
+INSTALL_USER=1
+
+CONF_LOADED=0
+if [[ -n "${CONFIG_FILE}" ]]; then
+  load_conf "${CONFIG_FILE}" || { err "Config not found: ${CONFIG_FILE}"; exit 1; }
+  CONF_LOADED=1
+elif [[ -n "${CLI_PREFIX}" && -f "${CLI_PREFIX}/danmo-install.conf" ]]; then
+  load_conf "${CLI_PREFIX}/danmo-install.conf" && CONF_LOADED=1
+elif [[ -n "${CLI_ROLE}" && -f "${INSTALL_STATE_DIR}/installs.d/${CLI_ROLE}.conf" ]]; then
+  load_conf "${INSTALL_STATE_DIR}/installs.d/${CLI_ROLE}.conf" && CONF_LOADED=1
+elif [[ -f "${INSTALL_STATE_DIR}/install.conf" ]]; then
+  load_conf "${INSTALL_STATE_DIR}/install.conf" && CONF_LOADED=1
+else
+  warn "No ${INSTALL_STATE_DIR}/install.conf — using PREFIX=/opt/danmo ROLE=all."
+  warn "Pass --prefix= / --role= or re-run install.sh to record state."
+fi
+
+[[ -n "${CLI_PREFIX}" ]] && PREFIX="${CLI_PREFIX}"
+[[ -n "${CLI_ROLE}" ]] && ROLE="${CLI_ROLE}"
+PREFIX="${PREFIX:-/opt/danmo}"
+ROLE="${ROLE:-all}"
+
+# If user forced --role on CLI, derive components from that role.
+# Otherwise keep INSTALL_* from conf when present (partial "all" installs).
+if [[ -n "${CLI_ROLE}" ]]; then
+  set_components_from_role
+elif [[ "${CONF_LOADED}" -eq 0 ]]; then
+  set_components_from_role
+elif [[ "${INSTALL_RELAY}" != "0" && "${INSTALL_RELAY}" != "1" ]]; then
+  set_components_from_role
+fi
 
 FROM_DIR="$(cd "${FROM_DIR}" && pwd)"
 BIN_SRC="${FROM_DIR}"
@@ -81,10 +151,10 @@ mkdir -p "${BACKUP_DIR}/bin" "${PREFIX}/bin"
 
 stop_one() {
   local u="$1"
-  if systemctl list-unit-files "${u}.service" &>/dev/null && systemctl is-enabled --quiet "${u}" 2>/dev/null; then
+  if systemctl is-active --quiet "${u}" 2>/dev/null; then
     systemctl stop "${u}" || true
     info "Stopped ${u}"
-  elif systemctl is-active --quiet "${u}" 2>/dev/null; then
+  elif systemctl is-enabled --quiet "${u}" 2>/dev/null; then
     systemctl stop "${u}" || true
     info "Stopped ${u}"
   fi
@@ -92,7 +162,7 @@ stop_one() {
 
 start_one() {
   local u="$1"
-  if [[ -f "/etc/systemd/system/${u}.service" ]] || systemctl list-unit-files "${u}.service" &>/dev/null; then
+  if [[ -f "/etc/systemd/system/${u}.service" ]] || systemctl cat "${u}.service" &>/dev/null; then
     systemctl start "${u}"
     info "Started ${u}"
   else
@@ -149,6 +219,16 @@ copy_apps() {
   info "Updated ${dest}"
 }
 
+# Refresh install.conf timestamps / keep domains after upgrade
+touch_install_conf() {
+  if [[ -f "${PREFIX}/danmo-install.conf" ]]; then
+    if grep -q '^INSTALLED_AT=' "${PREFIX}/danmo-install.conf" 2>/dev/null; then
+      sed -i "s|^INSTALLED_AT=.*|INSTALLED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)|" "${PREFIX}/danmo-install.conf" 2>/dev/null \
+        || true
+    fi
+  fi
+}
+
 info "Upgrade role=${ROLE} prefix=${PREFIX} from=${FROM_DIR}"
 info "Backup → ${BACKUP_DIR}"
 
@@ -164,8 +244,13 @@ info "Backup → ${BACKUP_DIR}"
 [[ "${INSTALL_ADMIN}" -eq 1 ]] && start_one danmo-admin
 [[ "${INSTALL_USER}" -eq 1 ]] && start_one danmo-user
 
+touch_install_conf
+
 if [[ "${SKIP_NGINX}" -eq 0 ]]; then
-  "${SCRIPT_DIR}/install.sh" --nginx-only --prefix="${PREFIX}" --role="${ROLE}" --non-interactive
+  "${SCRIPT_DIR}/install.sh" --nginx-only --prefix="${PREFIX}" --role="${ROLE}" --non-interactive \
+    ${API_DOMAIN:+--api-domain="${API_DOMAIN}"} \
+    ${ADMIN_DOMAIN:+--admin-domain="${ADMIN_DOMAIN}"} \
+    ${USER_DOMAIN:+--user-domain="${USER_DOMAIN}"}
 fi
 
 info "Done. Check logs for 'applied migration N' (sqlite now; mysql/ when enabled)."
