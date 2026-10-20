@@ -4,6 +4,7 @@
 
 - 设计：[docs/architecture.md](docs/architecture.md)
 - **运维（部署、配置、升级、备份、排障）：[docs/operations.md](docs/operations.md)**
+- **云平台部署（L4 转发、健康检查、Portal）：[docs/cloud-deployment.md](docs/cloud-deployment.md)**
 - 与 One API、New API、LiteLLM、GPT-Load、Sub2API 等的客观对比：[docs/comparison.md](docs/comparison.md)
 - relay 渠道熔断与 429 降权（`CB_*` / `RL_*`）：[docs/channel-health.md](docs/channel-health.md)
 - **部署前必读** — 合法授权、禁止规避上游协议的中转/转售、责任边界：[docs/compliance.md](docs/compliance.md)
