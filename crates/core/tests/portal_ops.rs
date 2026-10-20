@@ -8,6 +8,7 @@ async fn setup() -> (danmo_core::DbPool, tempfile::TempDir) {
     let db_path = dir.path().join("test.db");
     let mut config = Config::from_env().unwrap();
     config.database_url = format!("sqlite://{}?mode=rwc", db_path.display());
+    config.seed_demo = false;
     config.admin_username = format!("admin-{}", std::process::id());
     let pool = connect(&config).await.unwrap();
     (pool, dir)

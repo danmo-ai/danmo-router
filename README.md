@@ -26,7 +26,33 @@ User UI  ──────► danmo-user  × 1..N
                       └── shared DB (SQLite WAL / 后续 Postgres)
 ```
 
-扩容建议：优先扩 `danmo-relay`；admin/user 通常少量副本即可。多副本写库时请使用支持并发的数据库（当前 SQLite WAL 适合轻量多进程，不适合大量 relay 副本）。
+扩容建议：优先扩 `danmo-relay`；admin/user 通常少量副本即可。多副本写库时请使用支持并发的数据库（当前 SQLite WAL 适合轻量多进程，不适合大量 relay 副本）。渠道上的方言决定请求按哪套厂商规范透传或转换，模型价格上的原厂方言决定客户端看到的字段。
+
+## 界面
+
+管理后台（`http://localhost:5173`，默认 `admin` / `admin123`）：
+
+![概览](docs/images/admin-overview.png)
+
+![渠道](docs/images/admin-channels.png)
+
+![用户](docs/images/admin-users.png)
+
+![模型价格](docs/images/admin-prices.png)
+
+![兑换码](docs/images/admin-redemptions.png)
+
+![调用日志](docs/images/admin-logs.png)
+
+用户中心（`http://localhost:5174`，示例账号 `demo` / `demo1234`）：
+
+![账户概览](docs/images/user-overview.png)
+
+![API 令牌](docs/images/user-tokens.png)
+
+![可用模型](docs/images/user-models.png)
+
+![我的调用日志](docs/images/user-logs.png)
 
 ## 转发
 
@@ -74,12 +100,29 @@ make portals-dev-admin   # http://localhost:5173 → :3001
 make portals-dev-user    # http://localhost:5174 → :3002
 ```
 
+要在界面里看到渠道、用户和调用记录，把 `.env` 里的 `SEED_DEMO` 设为 `1` 后再启动。详见下一节。
+
 一体进程（调试用）：
 
 ```bash
 make run-all-in-one
 # Portal 需改代理：VITE_API_PROXY=http://127.0.0.1:3000 npm run dev
 ```
+
+## 模拟数据
+
+`SEED_DEMO=1` 时，第一个连上数据库的进程会写入一份示例数据（只写一次；已有用户 `demo` 则跳过）。删掉 SQLite 文件后再启动即可重新生成。
+
+| 账号 | 密码 | 说明 |
+|------|------|------|
+| `admin` | `admin123` | 管理后台，来自 `ADMIN_USERNAME` / `ADMIN_PASSWORD` |
+| `demo` | `demo1234` | 用户中心，分组 `vip`，含 playground / batch / legacy 令牌 |
+| `alice` | `alice123` | 普通用户 |
+| `bob` | `bob12345` | 已禁用 |
+
+示例令牌 `sk-demo-playground` 属于 `demo`。渠道里的上游 Key 都是占位符（`sk-demo-…-not-a-real-key`），不能打到真实厂商。示例里包含 OpenAI、Anthropic、DeepSeek、可协议转换的 Qwen、Gemini，以及一条停用的聚合渠道；价格表带原厂方言、输入分档和时段系数；管理后台有若干未使用的兑换码；日志里有成功、计费失败和上游错误。
+
+生产环境保持 `SEED_DEMO=0`。
 
 ## 生产部署（拆分）
 
@@ -123,7 +166,7 @@ git tag v0.1.0 && git push origin v0.1.0
 
 ```bash
 curl http://127.0.0.1:3000/v1/chat/completions \
-  -H "Authorization: Bearer sk-..." \
+  -H "Authorization: Bearer sk-demo-playground" \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}]}'
 
@@ -132,3 +175,5 @@ curl http://127.0.0.1:3000/v1/messages \
   -H "Content-Type: application/json" \
   -d '{"model":"claude-sonnet-4-5","max_tokens":256,"messages":[{"role":"user","content":"hello"}]}'
 ```
+
+令牌在用户中心创建。请求能转发之前，要在管理后台把渠道的上游 Key 换成真实密钥。上面的 `sk-demo-playground` 只在 `SEED_DEMO=1` 的数据库里存在。

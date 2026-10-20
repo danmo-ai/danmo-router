@@ -45,6 +45,7 @@ impl Harness {
         let db_path = dir.path().join("relay.db");
         let mut config = Config::from_env().unwrap();
         config.database_url = format!("sqlite://{}?mode=rwc", db_path.display());
+        config.seed_demo = false;
         config.relay_max_retries = 2;
         tune(&mut config);
         let config = Arc::new(config);

@@ -14,6 +14,7 @@ async fn setup() -> (danmo_core::DbPool, Arc<Config>, tempfile::TempDir) {
     let db_path = dir.path().join("test.db");
     let mut config = Config::from_env().unwrap();
     config.database_url = format!("sqlite://{}?mode=rwc", db_path.display());
+    config.seed_demo = false;
     config.admin_username = "admin".into();
     config.admin_password = "admin123".into();
     let pool = connect(&config).await.unwrap();
@@ -442,6 +443,7 @@ async fn migration_003_moves_models_into_rows() {
 
     let mut config = Config::from_env().unwrap();
     config.database_url = url;
+    config.seed_demo = false;
     let pool = connect(&config).await.unwrap();
 
     let rows: Vec<(i64, String, String, String)> = sqlx::query_as(

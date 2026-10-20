@@ -26,6 +26,8 @@ pub struct Config {
     pub relay_legacy_qps: u32,
     pub session_ttl_hours: i64,
     pub cors_origins: Vec<String>,
+    /// When set, `connect` fills an empty database with sample channels, users, and logs.
+    pub seed_demo: bool,
     /// Relay base shown in the user portal. Empty means the local default.
     pub public_relay_url: String,
 }
@@ -89,6 +91,7 @@ impl Config {
                 .parse()
                 .context("invalid SESSION_TTL_HOURS")?,
             cors_origins,
+            seed_demo: env_flag("SEED_DEMO"),
             public_relay_url: env::var("PUBLIC_RELAY_URL").unwrap_or_default(),
         })
     }
@@ -100,6 +103,13 @@ fn env_u32(name: &str, default: u32) -> Result<u32> {
         Ok(value) if value.is_empty() => Ok(default),
         Ok(value) => value.parse().with_context(|| format!("invalid {name}")),
     }
+}
+
+fn env_flag(name: &str) -> bool {
+    matches!(
+        env::var(name).ok().as_deref().map(str::trim),
+        Some("1" | "true" | "yes" | "on")
+    )
 }
 
 fn parse_encryption_key(hex_key: &str) -> Result<[u8; 32]> {
