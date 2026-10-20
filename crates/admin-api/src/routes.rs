@@ -10,7 +10,9 @@ use axum_extra::extract::cookie::{Cookie, SameSite};
 use danmo_core::billing;
 use danmo_core::dialect;
 use danmo_core::protocol::{AuthStyle, Protocol, RelayMode};
-use danmo_core::services::{channel, log as log_svc, session, user as user_svc};
+use danmo_core::services::{
+    channel, log as log_svc, redemption, session, token as token_svc, user as user_svc,
+};
 use danmo_core::usage;
 use danmo_core::AppError;
 use serde::Deserialize;
@@ -33,9 +35,28 @@ pub fn router(state: AdminState) -> Router {
             put(update_channel).delete(delete_channel_handler),
         )
         .route("/api/admin/channels/{id}/status", put(set_channel_status))
+        .route("/api/admin/channels/{id}/test", post(test_channel))
         .route("/api/admin/users", get(list_users).post(create_user))
         .route("/api/admin/users/{id}", put(update_user))
         .route("/api/admin/users/{id}/quota", post(adjust_quota))
+        .route("/api/admin/users/{id}/password", post(reset_password))
+        .route("/api/admin/users/{id}/tokens", get(list_user_tokens))
+        .route(
+            "/api/admin/users/{id}/tokens/{token_id}/status",
+            post(set_user_token_status),
+        )
+        .route(
+            "/api/admin/users/{id}/tokens/{token_id}",
+            axum::routing::delete(delete_user_token),
+        )
+        .route(
+            "/api/admin/redemptions",
+            get(list_redemptions).post(create_redemptions),
+        )
+        .route(
+            "/api/admin/redemptions/{id}",
+            axum::routing::delete(delete_redemption),
+        )
         .route(
             "/api/admin/model-prices",
             get(list_model_prices).put(upsert_model_price),
@@ -461,6 +482,9 @@ struct LogQuery {
     #[serde(default)]
     offset: i64,
     user_id: Option<i64>,
+    model: Option<String>,
+    status: Option<String>,
+    channel_id: Option<i64>,
 }
 
 fn default_limit() -> i64 {
@@ -472,6 +496,114 @@ async fn list_logs(
     _admin: AdminUser,
     Query(q): Query<LogQuery>,
 ) -> ApiResult<Json<Value>> {
-    let logs = log_svc::list_logs(&state.pool, q.user_id, q.limit, q.offset).await?;
+    let logs = log_svc::list_logs(
+        &state.pool,
+        &log_svc::LogQuery {
+            user_id: q.user_id,
+            model: q.model,
+            status: q.status,
+            channel_id: q.channel_id,
+            limit: q.limit,
+            offset: q.offset,
+        },
+    )
+    .await?;
     Ok(Json(json!({ "success": true, "data": logs })))
+}
+
+async fn test_channel(
+    State(state): State<AdminState>,
+    _admin: AdminUser,
+    Path(id): Path<i64>,
+) -> ApiResult<Json<Value>> {
+    let result = crate::probe::test_channel(&state.pool, &state.config, id).await?;
+    Ok(Json(json!({ "success": true, "data": result })))
+}
+
+#[derive(Deserialize)]
+struct ResetPasswordBody {
+    password: String,
+}
+
+async fn reset_password(
+    State(state): State<AdminState>,
+    _admin: AdminUser,
+    Path(id): Path<i64>,
+    Json(body): Json<ResetPasswordBody>,
+) -> ApiResult<Json<Value>> {
+    user_svc::set_password(&state.pool, id, &body.password).await?;
+    Ok(Json(json!({ "success": true })))
+}
+
+async fn list_user_tokens(
+    State(state): State<AdminState>,
+    _admin: AdminUser,
+    Path(id): Path<i64>,
+) -> ApiResult<Json<Value>> {
+    let _ = user_svc::get_by_id(&state.pool, id).await?;
+    let tokens = token_svc::list_by_user(&state.pool, id).await?;
+    Ok(Json(json!({ "success": true, "data": tokens })))
+}
+
+#[derive(Deserialize)]
+struct TokenStatusBody {
+    status: String,
+}
+
+async fn set_user_token_status(
+    State(state): State<AdminState>,
+    _admin: AdminUser,
+    Path((id, token_id)): Path<(i64, i64)>,
+    Json(body): Json<TokenStatusBody>,
+) -> ApiResult<Json<Value>> {
+    let token = token_svc::set_status(&state.pool, token_id, id, &body.status).await?;
+    Ok(Json(json!({ "success": true, "data": token })))
+}
+
+async fn delete_user_token(
+    State(state): State<AdminState>,
+    _admin: AdminUser,
+    Path((id, token_id)): Path<(i64, i64)>,
+) -> ApiResult<Json<Value>> {
+    token_svc::delete_token(&state.pool, token_id, id).await?;
+    Ok(Json(json!({ "success": true })))
+}
+
+async fn list_redemptions(
+    State(state): State<AdminState>,
+    _admin: AdminUser,
+) -> ApiResult<Json<Value>> {
+    let rows = redemption::list(&state.pool).await?;
+    Ok(Json(json!({ "success": true, "data": rows })))
+}
+
+#[derive(Deserialize)]
+struct CreateRedemptionsBody {
+    #[serde(default)]
+    name: String,
+    quota: i64,
+    #[serde(default = "default_count")]
+    count: i64,
+}
+
+fn default_count() -> i64 {
+    1
+}
+
+async fn create_redemptions(
+    State(state): State<AdminState>,
+    _admin: AdminUser,
+    Json(body): Json<CreateRedemptionsBody>,
+) -> ApiResult<Json<Value>> {
+    let rows = redemption::create_batch(&state.pool, &body.name, body.quota, body.count).await?;
+    Ok(Json(json!({ "success": true, "data": rows })))
+}
+
+async fn delete_redemption(
+    State(state): State<AdminState>,
+    _admin: AdminUser,
+    Path(id): Path<i64>,
+) -> ApiResult<Json<Value>> {
+    redemption::delete_unused(&state.pool, id).await?;
+    Ok(Json(json!({ "success": true })))
 }

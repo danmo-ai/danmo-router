@@ -232,6 +232,9 @@ pub fn encode_request(req: &Request) -> Value {
             Role::Assistant => {
                 for p in &m.parts {
                     match p {
+                        Part::Reasoning { text, .. } if !text.is_empty() => {
+                            parts.push(json!({"text": text, "thought": true}))
+                        }
                         Part::Text(t) if !t.is_empty() => parts.push(json!({"text": t})),
                         Part::ToolCall {
                             id,

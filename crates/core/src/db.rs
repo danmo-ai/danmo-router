@@ -63,6 +63,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/001_init.sql"),
     include_str!("../migrations/002_dialect.sql"),
     include_str!("../migrations/003_channel_models.sql"),
+    include_str!("../migrations/004_redemptions.sql"),
 ];
 
 /// Runs each migration once, recorded in `schema_migrations`. Databases created before the
@@ -114,7 +115,7 @@ async fn seed_admin(pool: &DbPool, config: &Config) -> AppResult<()> {
     }
 
     let password_hash = crypto::hash_password(&config.admin_password).map_err(AppError::Other)?;
-    sqlx::query(
+    let inserted = sqlx::query(
         r#"
         INSERT INTO users (username, password_hash, role, quota, used_quota, group_name, status)
         VALUES (?, ?, 'admin', 100000000, 0, 'default', 'active')
@@ -123,8 +124,13 @@ async fn seed_admin(pool: &DbPool, config: &Config) -> AppResult<()> {
     .bind(&config.admin_username)
     .bind(password_hash)
     .execute(pool)
-    .await?;
-    info!("seeded admin user '{}'", config.admin_username);
+    .await;
+    match inserted {
+        Ok(_) => info!("seeded admin user '{}'", config.admin_username),
+        // Another process (admin / user / relay) seeded the same username first.
+        Err(sqlx::Error::Database(e)) if e.message().contains("UNIQUE") => {}
+        Err(e) => return Err(e.into()),
+    }
     Ok(())
 }
 

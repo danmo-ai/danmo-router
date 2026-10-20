@@ -1,7 +1,9 @@
 use danmo_core::config::Config;
 use danmo_core::db::connect;
 use danmo_core::demo::DEMO_API_KEY;
-use danmo_core::services::{channel, log as log_svc, token as token_svc, user as user_svc};
+use danmo_core::services::{
+    channel, log as log_svc, redemption, token as token_svc, user as user_svc,
+};
 use tempfile::tempdir;
 
 async fn demo_pool() -> (danmo_core::DbPool, tempfile::TempDir) {
@@ -44,7 +46,19 @@ async fn demo_seed_fills_portals_and_does_not_repeat() {
     assert_eq!(tokens.len(), 3);
     assert!(tokens.iter().any(|t| t.status == "disabled"));
 
-    let logs = log_svc::list_logs(&pool, None, 50, 0).await.unwrap();
+    let redemptions = redemption::list(&pool).await.unwrap();
+    assert_eq!(redemptions.len(), 3);
+    assert!(redemptions.iter().all(|r| r.status == "unused"));
+
+    let logs = log_svc::list_logs(
+        &pool,
+        &log_svc::LogQuery {
+            limit: 50,
+            ..log_svc::LogQuery::default()
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(logs.len(), 7);
     assert!(logs.iter().any(|l| l.status == "billing_failed"));
     assert!(logs.iter().any(|l| l.reasoning_tokens > 0));
@@ -55,7 +69,17 @@ async fn demo_seed_fills_portals_and_does_not_repeat() {
     let pool2 = connect(&again).await.unwrap();
     assert_eq!(channel::list_channels(&pool2).await.unwrap().len(), 6);
     assert_eq!(
-        log_svc::list_logs(&pool2, None, 50, 0).await.unwrap().len(),
+        log_svc::list_logs(
+            &pool2,
+            &log_svc::LogQuery {
+                limit: 50,
+                ..log_svc::LogQuery::default()
+            },
+        )
+        .await
+        .unwrap()
+        .len(),
         7
     );
+    assert_eq!(redemption::list(&pool2).await.unwrap().len(), 3);
 }

@@ -410,12 +410,13 @@ dependencies = [
 
 [[package]]
 name = "danmo-admin-api"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "axum-extra",
  "cookie",
  "danmo-core",
+ "reqwest",
  "serde",
  "serde_json",
  "time",
@@ -424,7 +425,7 @@ dependencies = [
 
 [[package]]
 name = "danmo-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -447,7 +448,7 @@ dependencies = [
 
 [[package]]
 name = "danmo-relay"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -468,7 +469,7 @@ dependencies = [
 
 [[package]]
 name = "danmo-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -485,7 +486,7 @@ dependencies = [
 
 [[package]]
 name = "danmo-user-api"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "axum-extra",

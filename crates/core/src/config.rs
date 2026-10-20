@@ -16,6 +16,8 @@ pub struct Config {
     pub cors_origins: Vec<String>,
     /// When set, `connect` fills an empty database with sample channels, users, and logs.
     pub seed_demo: bool,
+    /// Relay base shown in the user portal. Empty means the local default.
+    pub public_relay_url: String,
 }
 
 impl Config {
@@ -72,6 +74,7 @@ impl Config {
                 .context("invalid SESSION_TTL_HOURS")?,
             cors_origins,
             seed_demo: env_flag("SEED_DEMO"),
+            public_relay_url: env::var("PUBLIC_RELAY_URL").unwrap_or_default(),
         })
     }
 }

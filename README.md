@@ -1,6 +1,6 @@
 # danmo-router
 
-Fast LLM Router — OpenAI 兼容协议中转站，包含流量转发、管理 Portal、用户 Portal。
+多协议 LLM 中转站：Chat、Responses、Messages、Gemini、Embeddings 转发，管理 Portal 和用户 Portal。客户端按模型看到的协议行为与原厂一致；渠道按每个模型配置上游方言。设计见 [docs/architecture.md](docs/architecture.md)。
 
 ## 架构
 
@@ -8,7 +8,7 @@ Fast LLM Router — OpenAI 兼容协议中转站，包含流量转发、管理 P
 
 | 二进制 | 默认端口 | 职责 |
 |--------|----------|------|
-| `danmo-relay` | 3000 | `/v1/*` 流量转发（可水平扩容） |
+| `danmo-relay` | 3000 | 流量转发（可水平扩容） |
 | `danmo-admin` | 3001 | `/api/admin/*` 管理 API |
 | `danmo-user` | 3002 | `/api/user/*` 用户 API |
 | `danmo-router` | 3000 | 本地一体进程（不建议生产） |
@@ -37,6 +37,8 @@ User UI  ──────► danmo-user  × 1..N
 
 ![模型价格](docs/images/admin-prices.png)
 
+![兑换码](docs/images/admin-redemptions.png)
+
 ![调用日志](docs/images/admin-logs.png)
 
 用户中心（`http://localhost:5174`，示例账号 `demo` / `demo1234`）：
@@ -45,7 +47,25 @@ User UI  ──────► danmo-user  × 1..N
 
 ![API 令牌](docs/images/user-tokens.png)
 
+![可用模型](docs/images/user-models.png)
+
 ![我的调用日志](docs/images/user-logs.png)
+
+## 转发
+
+入站协议由路径决定。模型价格上的 `native_dialects` 是原厂方言；渠道下每个模型一行，带上游模型名和上游方言。两端协议和方言相同则透传原字节，否则经中间表示转换。`opaque` 行只透传同协议请求。用量按响应字段计费，没有可用字段则退款并记 `billing_failed`。
+
+| 路径 | 协议 |
+|------|------|
+| `POST /v1/chat/completions` | OpenAI Chat |
+| `POST /v1/responses` | OpenAI Responses |
+| `POST /v1/messages` | Anthropic Messages |
+| `POST /v1/embeddings` | Embeddings |
+| `POST /v1beta/models/{model}:generateContent` | Gemini |
+| `POST /v1beta/models/{model}:streamGenerateContent` | Gemini 流式 |
+| `GET /v1/models` | 模型列表 |
+
+完整的方言列表、转发判定、数据模型和计费公式见 [系统架构](docs/architecture.md)。
 
 ## Makefile
 
@@ -97,7 +117,7 @@ make run-all-in-one
 | `alice` | `alice123` | 普通用户 |
 | `bob` | `bob12345` | 已禁用 |
 
-示例令牌 `sk-demo-playground` 属于 `demo`。渠道里的上游 Key 都是占位符（`sk-demo-…-not-a-real-key`），不能打到真实厂商。示例里包含 OpenAI、Anthropic、DeepSeek、可协议转换的 Qwen、Gemini，以及一条停用的聚合渠道；价格表带原厂方言、输入分档和时段系数；日志里有成功、计费失败和上游错误。
+示例令牌 `sk-demo-playground` 属于 `demo`。渠道里的上游 Key 都是占位符（`sk-demo-…-not-a-real-key`），不能打到真实厂商。示例里包含 OpenAI、Anthropic、DeepSeek、可协议转换的 Qwen、Gemini，以及一条停用的聚合渠道；价格表带原厂方言、输入分档和时段系数；管理后台有若干未使用的兑换码；日志里有成功、计费失败和上游错误。
 
 生产环境保持 `SEED_DEMO=0`。
 
@@ -139,11 +159,18 @@ git tag v0.1.0 && git push origin v0.1.0
 
 ## 调用 API
 
+先在管理后台配置渠道和模型价格。令牌用 `Authorization: Bearer sk-...`；Messages 也接受 `x-api-key`，Gemini 也接受 `x-goog-api-key`。
+
 ```bash
 curl http://127.0.0.1:3000/v1/chat/completions \
   -H "Authorization: Bearer sk-demo-playground" \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}]}'
+
+curl http://127.0.0.1:3000/v1/messages \
+  -H "x-api-key: sk-..." \
+  -H "Content-Type: application/json" \
+  -d '{"model":"claude-sonnet-4-5","max_tokens":256,"messages":[{"role":"user","content":"hello"}]}'
 ```
 
 令牌在用户中心创建。请求能转发之前，要在管理后台把渠道的上游 Key 换成真实密钥。上面的 `sk-demo-playground` 只在 `SEED_DEMO=1` 的数据库里存在。

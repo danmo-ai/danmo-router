@@ -10,6 +10,7 @@ use crate::error::{AppError, AppResult};
 use crate::models::{Channel, User};
 use crate::services::channel::{self, ChannelInput, ChannelModelInput};
 use crate::services::log::{self, NewLog};
+use crate::services::redemption;
 use crate::services::user;
 use tracing::info;
 
@@ -31,6 +32,8 @@ pub async fn seed_demo(pool: &DbPool, enc_key: &[u8; 32]) -> AppResult<()> {
     billing::upsert_group_ratio(pool, "default", 1.0).await?;
     billing::upsert_group_ratio(pool, "vip", 0.8).await?;
     seed_prices(pool).await?;
+    redemption::create_batch(pool, "新用户礼包", 50_000, 2).await?;
+    redemption::create_batch(pool, "活动加码", 200_000, 1).await?;
 
     let openai = seed_channels(pool, enc_key).await?;
     let playground = insert_token(
