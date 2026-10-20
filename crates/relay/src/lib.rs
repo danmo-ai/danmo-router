@@ -3,6 +3,7 @@ mod convert;
 mod dialect;
 mod error;
 mod forward;
+mod health;
 mod router;
 mod sse;
 mod state;

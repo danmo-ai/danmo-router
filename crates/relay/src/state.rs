@@ -1,3 +1,4 @@
+use crate::health::ChannelHealth;
 use danmo_core::{Config, DbPool};
 use reqwest::Client;
 use std::sync::Arc;
@@ -7,6 +8,7 @@ pub struct RelayState {
     pub pool: DbPool,
     pub config: Arc<Config>,
     pub http: Client,
+    pub health: Arc<ChannelHealth>,
 }
 
 impl RelayState {
@@ -15,6 +17,12 @@ impl RelayState {
             .timeout(std::time::Duration::from_secs(120))
             .build()
             .expect("http client");
-        Self { pool, config, http }
+        let health = Arc::new(ChannelHealth::new(config.health.clone()));
+        Self {
+            pool,
+            config,
+            http,
+            health,
+        }
     }
 }

@@ -9,9 +9,24 @@ use rand::Rng;
 pub struct ChannelCandidate {
     pub channel: Channel,
     pub row: ChannelModel,
+    /// Weight used by the shuffle: the configured weight scaled by [`WEIGHT_SCALE`], which the
+    /// relay may lower further for a channel that is being rate limited.
+    pub effective_weight: i64,
 }
 
+/// Resolution for fractional weight factors.
+pub const WEIGHT_SCALE: i64 = 100;
+
 impl ChannelCandidate {
+    pub fn new(channel: Channel, row: ChannelModel) -> Self {
+        let effective_weight = channel.weight.max(1) * WEIGHT_SCALE;
+        Self {
+            channel,
+            row,
+            effective_weight,
+        }
+    }
+
     pub fn upstream_model(&self) -> &str {
         self.row.upstream_name()
     }
@@ -30,6 +45,18 @@ impl ChannelCandidate {
 /// Select channels for a group+model that can serve the inbound protocol, ordered by priority
 /// (desc), weight-random within same priority.
 pub async fn select_channels(
+    pool: &DbPool,
+    group_name: &str,
+    model: &str,
+    inbound: Protocol,
+    exclude_ids: &[i64],
+) -> AppResult<Vec<ChannelCandidate>> {
+    let candidates = eligible_channels(pool, group_name, model, inbound, exclude_ids).await?;
+    Ok(weighted_shuffle_by_priority(candidates))
+}
+
+/// Channels that can serve the request, unordered; never empty.
+pub async fn eligible_channels(
     pool: &DbPool,
     group_name: &str,
     model: &str,
@@ -67,7 +94,7 @@ pub async fn select_channels(
             continue;
         };
         let row = model_rows.swap_remove(i);
-        let candidate = ChannelCandidate { channel, row };
+        let candidate = ChannelCandidate::new(channel, row);
         if candidate.serves(inbound) {
             candidates.push(candidate);
         }
@@ -79,10 +106,11 @@ pub async fn select_channels(
         )));
     }
 
-    Ok(weighted_shuffle_by_priority(candidates))
+    Ok(candidates)
 }
 
-fn weighted_shuffle_by_priority(mut channels: Vec<ChannelCandidate>) -> Vec<ChannelCandidate> {
+/// Order by priority (desc), weighted-random by `effective_weight` within a priority.
+pub fn weighted_shuffle_by_priority(mut channels: Vec<ChannelCandidate>) -> Vec<ChannelCandidate> {
     if channels.is_empty() {
         return channels;
     }
@@ -111,11 +139,11 @@ fn weighted_shuffle_by_priority(mut channels: Vec<ChannelCandidate>) -> Vec<Chan
         }
 
         while !same.is_empty() {
-            let total_weight: i64 = same.iter().map(|c| c.channel.weight.max(1)).sum();
+            let total_weight: i64 = same.iter().map(|c| c.effective_weight.max(1)).sum();
             let mut pick = rng.gen_range(0..total_weight);
             let mut idx = 0;
             for (i, ch) in same.iter().enumerate() {
-                pick -= ch.channel.weight.max(1);
+                pick -= ch.effective_weight.max(1);
                 if pick < 0 {
                     idx = i;
                     break;
@@ -159,7 +187,7 @@ mod tests {
             upstream_model: String::new(),
             upstream_dialect: "standard".into(),
         };
-        ChannelCandidate { channel, row }
+        ChannelCandidate::new(channel, row)
     }
 
     #[test]

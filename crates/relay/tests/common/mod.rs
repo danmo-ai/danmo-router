@@ -23,16 +23,23 @@ pub struct Harness {
     pub mock: MockServer,
     pub key: String,
     pub user_id: i64,
+    /// Shared across calls so channel health carries over between requests.
+    state: RelayState,
     _dir: TempDir,
 }
 
 impl Harness {
     pub async fn new() -> Self {
+        Self::with_config(|_| {}).await
+    }
+
+    pub async fn with_config(edit: impl FnOnce(&mut Config)) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("relay.db");
         let mut config = Config::from_env().unwrap();
         config.database_url = format!("sqlite://{}?mode=rwc", db_path.display());
         config.relay_max_retries = 2;
+        edit(&mut config);
         let config = Arc::new(config);
         let pool = connect(&config).await.unwrap();
         let user = user_svc::create_user(&pool, "u1", "secret1", "user", USER_QUOTA, "default")
@@ -42,6 +49,7 @@ impl Harness {
             .await
             .unwrap();
         Self {
+            state: RelayState::new(pool.clone(), config.clone()),
             pool,
             config,
             mock: MockServer::start().await,
@@ -72,7 +80,7 @@ impl Harness {
         headers: &[(&str, String)],
         body: impl Into<String>,
     ) -> (StatusCode, HeaderMap, Bytes) {
-        let app = danmo_relay::router(RelayState::new(self.pool.clone(), self.config.clone()));
+        let app = danmo_relay::router(self.state.clone());
         let mut req = axum::http::Request::builder()
             .method("POST")
             .uri(uri)
