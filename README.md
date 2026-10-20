@@ -160,7 +160,7 @@ git tag v0.1.0 && git push origin v0.1.0
 
 ```bash
 curl http://127.0.0.1:3000/v1/chat/completions \
-  -H "Authorization: Bearer sk-demo-playground" \
+  -H "Authorization: Bearer sk-de0100000000000000000000000000000000000000000000" \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}]}'
 
@@ -170,4 +170,4 @@ curl http://127.0.0.1:3000/v1/messages \
   -d '{"model":"claude-sonnet-4-5","max_tokens":256,"messages":[{"role":"user","content":"hello"}]}'
 ```
 
-令牌在用户中心创建。请求能转发之前，要在管理后台把渠道的上游 Key 换成真实密钥。上面的 `sk-demo-playground` 只在 `SEED_DEMO=1` 的数据库里存在。
+令牌在用户中心创建。请求能转发之前，要在管理后台把渠道的上游 Key 换成真实密钥。上面的演示令牌只在 `SEED_DEMO=1` 的数据库里存在。
