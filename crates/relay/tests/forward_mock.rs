@@ -421,3 +421,92 @@ async fn messages_errors_use_anthropic_shape() {
     assert_eq!(v["type"], "error");
     assert_eq!(v["error"]["type"], "authentication_error");
 }
+
+fn ok_chat() -> ResponseTemplate {
+    ResponseTemplate::new(200).set_body_json(json!({
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+    }))
+}
+
+/// A preferred channel on `/flaky` that answers with `flaky`, and a fallback on `/v1`.
+async fn flaky_and_fallback(h: &Harness, flaky: ResponseTemplate) {
+    Mock::given(method("POST"))
+        .and(path("/flaky/chat/completions"))
+        .respond_with(flaky)
+        .mount(&h.mock)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ok_chat())
+        .mount(&h.mock)
+        .await;
+    h.channel(ChannelInput {
+        name: "flaky".into(),
+        base_url: format!("{}/flaky", h.mock.uri()),
+        priority: 10,
+        ..chat_channel("gpt-4o-mini")
+    })
+    .await;
+    h.channel(ChannelInput {
+        name: "fallback".into(),
+        ..chat_channel("gpt-4o-mini")
+    })
+    .await;
+}
+
+async fn flaky_hits(h: &Harness) -> usize {
+    h.upstream_requests()
+        .await
+        .iter()
+        .filter(|r| r.url.path().starts_with("/flaky/"))
+        .count()
+}
+
+const CHAT: &str = r#"{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}"#;
+
+#[tokio::test]
+async fn failing_channel_is_ejected_after_threshold() {
+    let h = Harness::with_config(|c| c.health.failure_threshold = 2).await;
+    flaky_and_fallback(&h, ResponseTemplate::new(503)).await;
+
+    for _ in 0..5 {
+        let (status, _, _) = h.call("/v1/chat/completions", &h.bearer(), CHAT).await;
+        assert_eq!(status, 200);
+    }
+    assert_eq!(flaky_hits(&h).await, 2);
+}
+
+#[tokio::test]
+async fn retry_after_ejects_rate_limited_channel() {
+    let h = Harness::new().await;
+    flaky_and_fallback(
+        &h,
+        ResponseTemplate::new(429).insert_header("retry-after", "60"),
+    )
+    .await;
+
+    for _ in 0..3 {
+        let (status, _, _) = h.call("/v1/chat/completions", &h.bearer(), CHAT).await;
+        assert_eq!(status, 200);
+    }
+    assert_eq!(flaky_hits(&h).await, 1);
+}
+
+#[tokio::test]
+async fn disabled_health_keeps_trying_failing_channel() {
+    let h = Harness::with_config(|c| {
+        c.health.enabled = false;
+        c.health.failure_threshold = 1;
+    })
+    .await;
+    flaky_and_fallback(&h, ResponseTemplate::new(503)).await;
+
+    for _ in 0..3 {
+        let (status, _, _) = h.call("/v1/chat/completions", &h.bearer(), CHAT).await;
+        assert_eq!(status, 200);
+    }
+    assert_eq!(flaky_hits(&h).await, 3);
+}

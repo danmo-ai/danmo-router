@@ -106,6 +106,28 @@ danmo-router 的差异化不在「渠道数量」，而在：
 | 水平扩展 | 注意 SQLite 与会话 | 集群模式 + 外部 LB；状态在 DB/Redis | Proxy 可多副本 | 视部署 | 有状态依赖 | **优先扩 `danmo-relay`**；限额为**进程内存**，多副本不共享计数 |
 | 可观测 | 日志 / 仪表盘 | 仪表盘较全 | OTel、回调、护栏生态强 | 健康、路由诊断、用量 | 管理端监控 | 请求日志 + tracing 基础；无 New API/LiteLLM 级仪表盘深度 |
 
+## 渠道可用性与上游隔离
+
+本节只谈**选路、单请求重试、429/5xx 后的隔离与恢复**（核验依据各项目公开文档与源码，2026-10）。GPT-Load / Sub2API 也有 Key 轮换与冷却，但产品重心不在「多租户渠道表」，此处不展开；详见各自仓库。
+
+| 维度 | danmo-router | One API | New API | LiteLLM Proxy |
+|------|--------------|---------|---------|---------------|
+| **选路** | 优先级分层 + 同层权重随机 | 首次最高优先级随机；重试策略随版本/缓存（曾出现无 Redis 时只在最高优先级重试，见 [issue #1197](https://github.com/songquanpeng/one-api/issues/1197)） | 首次仅最高 priority 档；同档权重随机；`RetryTimes=0` 不换渠道 | 多 deployment；`order` 逐级、`weight`、RPM/并发等 |
+| **单请求失败切换** | 失败渠道 `exclude`，同优先级可换兄弟渠道（`RELAY_MAX_RETRIES`） | 429/5xx 可重试；重试选路见上 | 需 `RetryTimes>0`；重试常按**下一 priority 档**，同档兄弟在一次请求内可能用不上 | `num_retries` + deployment 切换；model 级 `fallbacks` |
+| **坏渠道隔离** | 内存熔断 + 半开；**不改** DB `status` | 常 **持久 auto-disable**（如 401）；Pro 文档有 cooldown 等 | **自动禁用**写库（状态码/关键词可配）；连续失败阈值（社区方向） | **Cooldown**；429 可立即 cooldown；也可按分钟失败率 |
+| **429** | 权重减半 + 时间恢复；秒数 `Retry-After` 可踢出 | 参与重试；是否 disable 看 monitor | 默认**不**因 429 禁用；常需状态码映射等运营手段 | 429 **立即** cooldown（默认约 5s，可配） |
+| **恢复** | 半开探测 + 成功即恢复；全熔断兜底 | 手动/自动启用、测试任务 | 多依赖手动或定时测渠道；[半开机制仍在讨论](https://github.com/QuantumNous/new-api/issues/5420) | cooldown 到期后再参与选路 |
+| **健康状态存储** | 每 **relay 进程**内存 | DB + monitor | DB + 进程内计数 | 常配 **Redis**（多实例） |
+| **粒度** | **(渠道, 模型)** | 渠道 | 渠道；multi-key 时按 key | **deployment** |
+
+**选型时几条硬差异：**
+
+1. **持久禁用 vs 临时踢出**：One API / New API 命中规则后常写 `auto_disabled`，全实例可见，恢复靠人工或定时测试。danmo-router 用**内存踢出 + 半开**（实现与运维见 [channel-health.md](channel-health.md)），避免多 relay 写库，但副本间状态短暂不一致。
+2. **429**：New API 默认可重试且不易禁用，同档免费渠道易被反复抽到；LiteLLM 硬 cooldown；danmo-router **软降权**（AIMD 减半 + 线性恢复），必要时 `Retry-After` 硬踢出。
+3. **重试与优先级**：danmo 同请求内 exclude 已失败渠道，仍优先高优先级层；New API 重试若按 priority 下标降档，同档兜底弱，备用常放在更低 priority。
+
+源码入口：One API [`controller/relay.go`](https://github.com/songquanpeng/one-api/blob/master/controller/relay.go)；New API [`service/channel.go`](https://github.com/QuantumNous/new-api/blob/main/service/channel.go)；LiteLLM [load balancing / cooldowns](https://docs.litellm.ai/docs/proxy/load_balancing)。
+
 ## 安全与合规（选型硬门槛）
 
 客观事实，不是恐吓：
@@ -140,7 +162,7 @@ danmo-router 的差异化不在「渠道数量」，而在：
 | 客户端 Anthropic/Gemini SDK 直连 + 国产模型思考/usage 字段不跑偏 | danmo-router | 方言与透传/转换边界写进架构 |
 | 支付闭环、工单、实名、营销 | VoAPI Pro 或 New API | 开源社区版通常不够 |
 
-danmo-router **当前明显短板**（避免误判）：无内置支付；无 Realtime/绘图任务面；无官方 Helm；限额不跨进程；生态与插件远少于 New API / LiteLLM；项目仍早，生产前需自行压测协议与对账。
+danmo-router **当前明显短板**（避免误判）：无内置支付；无 Realtime/绘图任务面；无官方 Helm；入口限额与渠道熔断状态均**不跨 relay 进程**；生态与插件远少于 New API / LiteLLM；项目仍早，生产前需自行压测协议与对账。
 
 ## 上线前最低核验清单
 
@@ -160,6 +182,6 @@ danmo-router **当前明显短板**（避免误判）：无内置支付；无 Re
 - GPT-Load：https://github.com/tbphp/gpt-load · https://www.gpt-load.com  
 - Sub2API：https://github.com/Wei-Shaw/sub2api（阅读其 ToS 警告）  
 - VoAPI：https://github.com/VoAPI/VoAPI  
-- 本项目架构：[architecture.md](architecture.md)
+- 本项目架构：[architecture.md](architecture.md) · 渠道健康（relay）：[channel-health.md](channel-health.md)
 
 第三方综述（有商业利益披露，结论需交叉验证）：[GPTZZZ 选型文](https://gptzzz.ai/blog/open-source-api-relay-selection/)、[Awesome AI Gateway 对比](https://cuihuan.github.io/awesome-ai-gateway/compare/one-api-vs-new-api-vs-litellm.zh-CN.md)、[GatewayScore: New API vs LiteLLM](https://gatewayscore.com/compare/new-api-vs-litellm/)。

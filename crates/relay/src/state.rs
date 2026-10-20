@@ -1,4 +1,5 @@
 use crate::admit::{Admitter, Limits};
+use crate::health::ChannelHealth;
 use danmo_core::{Config, DbPool};
 use reqwest::Client;
 use std::sync::Arc;
@@ -8,6 +9,7 @@ pub struct RelayState {
     pub pool: DbPool,
     pub config: Arc<Config>,
     pub http: Client,
+    pub health: Arc<ChannelHealth>,
     pub admit: Admitter,
 }
 
@@ -17,11 +19,13 @@ impl RelayState {
             .timeout(std::time::Duration::from_secs(120))
             .build()
             .expect("http client");
+        let health = Arc::new(ChannelHealth::new(config.health.clone()));
         let admit = Admitter::new(Limits::from_config(&config));
         Self {
             pool,
             config,
             http,
+            health,
             admit,
         }
     }

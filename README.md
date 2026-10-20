@@ -4,6 +4,7 @@
 
 - 设计：[docs/architecture.md](docs/architecture.md)
 - 与 One API、New API、LiteLLM、GPT-Load、Sub2API 等的客观对比：[docs/comparison.md](docs/comparison.md)
+- relay 渠道熔断与 429 降权（`CB_*` / `RL_*`）：[docs/channel-health.md](docs/channel-health.md)
 
 ## 架构
 
@@ -159,6 +160,8 @@ git tag v0.1.0 && git push origin v0.1.0
 ## 环境变量
 
 见 [`.env.example`](.env.example)。`PORT` 未设置时各二进制使用上表默认端口。
+
+`CB_*` / `RL_*` 等 relay 变量见 [渠道健康与选路](docs/channel-health.md#环境变量)。
 
 ## 调用 API
 

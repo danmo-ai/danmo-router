@@ -13,6 +13,7 @@ use crate::collect::{self, UsageCollector};
 use crate::convert::{self, StreamConverter};
 use crate::dialect::{self, DialectCodec};
 use crate::error::{protocol_error, upstream_message, RelayResult};
+use crate::health;
 use crate::sse::{self, SseEvent, SseParser};
 use crate::state::RelayState;
 use crate::upstream;
@@ -176,17 +177,22 @@ pub async fn handle(state: &RelayState, inbound: Inbound) -> RelayResult<Respons
     let started = Instant::now();
 
     for _attempt in 0..max_retries {
-        let candidates =
-            match routing::select_channels(&state.pool, &group, &model, inbound.protocol, &exclude)
-                .await
-            {
-                Ok(c) => c,
-                Err(e) => {
-                    last_error = e.to_string();
-                    break;
-                }
-            };
-        let Some(candidate) = candidates.into_iter().next() else {
+        let candidates = match routing::eligible_channels(
+            &state.pool,
+            &group,
+            &model,
+            inbound.protocol,
+            &exclude,
+        )
+        .await
+        {
+            Ok(c) => c,
+            Err(e) => {
+                last_error = e.to_string();
+                break;
+            }
+        };
+        let Some(candidate) = state.health.pick(candidates, &model, Instant::now()) else {
             break;
         };
         let up_dialect = candidate.dialect();
@@ -251,12 +257,21 @@ pub async fn handle(state: &RelayState, inbound: Inbound) -> RelayResult<Respons
             Err(e) => {
                 last_error = format!("upstream connect error: {e}");
                 warn!(channel_id = ch.id, error = %last_error, "upstream failed");
+                state.health.record_failure(ch.id, &model, Instant::now());
                 continue;
             }
         };
 
         let status = response.status();
         if status.as_u16() == 429 || status.is_server_error() {
+            if status.as_u16() == 429 {
+                let wait = health::retry_after(response.headers());
+                state
+                    .health
+                    .record_rate_limited(ch.id, &model, wait, Instant::now());
+            } else {
+                state.health.record_failure(ch.id, &model, Instant::now());
+            }
             last_error = format!("upstream status {}", status.as_u16());
             warn!(
                 channel_id = ch.id,
@@ -313,6 +328,20 @@ pub async fn handle(state: &RelayState, inbound: Inbound) -> RelayResult<Respons
     Err(AppError::Other(anyhow::anyhow!(last_error)).into())
 }
 
+impl Ctx {
+    /// A reachable upstream counts as healthy even when it rejects the request (4xx); only a
+    /// response that breaks off counts against the channel.
+    fn report_health(&self, ok: bool) {
+        let health = &self.state.health;
+        let now = Instant::now();
+        if ok {
+            health.record_success(self.channel_id, &self.billing.model, now);
+        } else {
+            health.record_failure(self.channel_id, &self.billing.model, now);
+        }
+    }
+}
+
 fn base_log(ctx: &Ctx, status: &str) -> log_svc::NewLog {
     log_svc::NewLog {
         channel_id: Some(ctx.channel_id),
@@ -330,10 +359,9 @@ async fn upstream_error(ctx: Ctx, response: reqwest::Response) -> RelayResult<Re
     let status =
         StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let headers = upstream::response_headers(response.headers());
-    let body = response
-        .bytes()
-        .await
-        .map_err(|e| AppError::Other(e.into()))?;
+    let body = response.bytes().await;
+    ctx.report_health(body.is_ok());
+    let body = body.map_err(|e| AppError::Other(e.into()))?;
     let message = upstream_message(&body);
     let _ = billing::refund(&ctx.state.pool, &ctx.billing).await;
     let _ = log_svc::insert_log(
@@ -417,10 +445,9 @@ async fn finalize(
 async fn buffered_response(ctx: Ctx, response: reqwest::Response) -> RelayResult<Response> {
     let status = StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::OK);
     let mut headers = upstream::response_headers(response.headers());
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| AppError::Other(e.into()))?;
+    let bytes = response.bytes().await;
+    ctx.report_health(bytes.is_ok());
+    let bytes = bytes.map_err(|e| AppError::Other(e.into()))?;
 
     let parsed: Option<Value> = serde_json::from_slice(&bytes).ok();
     let outcome = match &parsed {
@@ -641,6 +668,7 @@ fn stream_response(ctx: Ctx, response: reqwest::Response, permit: AdmitPermit) -
             let _ = tx.send(Err(std::io::Error::other(e.clone()))).await;
         }
         drop(tx);
+        ctx.report_health(stream_error.is_none());
 
         let soft_error = collector.soft_error.take();
         let outcome = match soft_error {

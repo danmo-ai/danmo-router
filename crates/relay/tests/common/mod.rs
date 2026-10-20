@@ -27,15 +27,24 @@ pub struct Harness {
     _dir: TempDir,
 }
 
+fn relax_limits(config: &mut Config) {
+    config.relay_user_concurrency = 1_000_000;
+    config.relay_instance_concurrency = 1_000_000;
+    config.relay_user_qps = 1_000_000;
+    config.relay_instance_qps = 1_000_000;
+    config.relay_legacy_concurrency = 1_000_000;
+    config.relay_legacy_qps = 1_000_000;
+}
+
 impl Harness {
     pub async fn new() -> Self {
+        Self::build(relax_limits).await
+    }
+
+    pub async fn with_config(edit: impl FnOnce(&mut Config)) -> Self {
         Self::build(|config| {
-            config.relay_user_concurrency = 1_000_000;
-            config.relay_instance_concurrency = 1_000_000;
-            config.relay_user_qps = 1_000_000;
-            config.relay_instance_qps = 1_000_000;
-            config.relay_legacy_concurrency = 1_000_000;
-            config.relay_legacy_qps = 1_000_000;
+            relax_limits(config);
+            edit(config);
         })
         .await
     }
@@ -68,9 +77,9 @@ impl Harness {
         .unwrap();
         let state = RelayState::new(pool.clone(), config.clone());
         Self {
+            state,
             pool,
             config,
-            state,
             mock: MockServer::start().await,
             key: created.raw_key,
             user_id: user.id,

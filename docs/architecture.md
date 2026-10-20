@@ -82,7 +82,9 @@ User UI  ──────► danmo-user
 
 透传仍允许两处与方言无关的改写：把 `model` 换成行上的上游模型名；Chat 流在客户端未要求时补 `stream_options.include_usage`，并吞掉因此多出来的用量块。
 
-选路按分组、模型、优先级和权重。候选必须 `serves(入站协议)`，且 `opaque` 行在协议不同时被排除。上游返回 429 或 5xx 时换下一个渠道，次数由 `RELAY_MAX_RETRIES` 限制。客户端断开后继续读完上游，以便拿到 usage。
+选路按分组、模型、优先级和权重。候选必须 `serves(入站协议)`，且 `opaque` 行在协议不同时被排除。每次重试前在进程内应用渠道健康（熔断、429 降权）；上游返回 429 或 5xx 时换下一个渠道，次数由 `RELAY_MAX_RETRIES` 限制。客户端断开后继续读完上游，以便拿到 usage。
+
+渠道健康（配置、状态机、环境变量）见 **[渠道健康与选路](channel-health.md)**；与同类项目的选型对比见 **[comparison.md](comparison.md#渠道可用性与上游隔离)**。
 
 ## 中间表示
 
