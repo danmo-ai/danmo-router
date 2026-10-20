@@ -2,7 +2,7 @@
 
 `danmo-relay` / `danmo-admin` / `danmo-user` 监听 **HTTP**（默认 3000/3001/3002）。公网 **TLS 在 Nginx 终结**，再反代到本机 loopback。
 
-**发布包布局：** `make package` 后 **`dist/packages/danmo-user-portal/`** = 用户 API + 用户 Portal 静态；**`danmo-admin-portal/`** = 管理 API + 管理 Portal；**`danmo-relay/`** = 仅转发。完整 **`dist/`** 根目录含三者 + `deploy/`。见 [packages/README.md](packages/README.md)。
+**发布包布局：** GitHub Release 主 tar 与 `make package` 的 **`dist/`** 结构一致（见 [RELEASE-LAYOUT.md](RELEASE-LAYOUT.md)）。**`dist/packages/danmo-user-portal/`** = 用户 API + Portal；**`danmo-admin-portal/`** = 管理 API + Portal；**`danmo-relay/`** = 仅转发。
 
 ## 推荐拓扑
 

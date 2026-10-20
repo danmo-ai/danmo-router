@@ -62,7 +62,7 @@ make package
 
 小流量可 **一台机** 解压完整 `dist/`；分机时用户面只需拷贝 **`danmo-user-portal`** 到 `/opt/danmo-user`（管理面、relay 同理），仍共用一份 `.env` 中的数据库与 `ENCRYPTION_KEY`。
 
-**Release：** 推送 `v*` tag 触发 [`.github/workflows/release.yml`](../.github/workflows/release.yml)，GitHub Release 含多平台二进制 tar 与 Portal tar。
+**Release：** 推送 `v*` tag 触发 [`.github/workflows/release.yml`](../.github/workflows/release.yml)。每个平台的 **`danmo-router-<tag>-<target>.tar.gz`** 含二进制、**`apps/admin` / `apps/user` Portal 静态**、`deploy/`、`packages/`（布局见 [`deploy/RELEASE-LAYOUT.md`](../deploy/RELEASE-LAYOUT.md)）。另附仅静态的 `danmo-portals-<tag>.tar.gz`。
 
 **质量门禁（与 CI 一致）：**
 
