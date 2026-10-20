@@ -265,7 +265,7 @@ GET /healthz
   - `every channel is ejected, ignoring circuit breakers`
   - `channel recovered`
 
-**管理后台调用日志** 可筛 `success` / `billing_failed` / 上游错误；`billing_failed` 表示响应中无法解析用量，系统会退预扣额度。
+**管理后台调用日志** 可筛 `success` / `billing_failed` / 上游错误。计费顺序（预扣 → 按上游 usage 结算、多退少补 → 失败则全额退预扣）见 [architecture.md — 用量与计费](architecture.md#用量与计费)。`billing_failed` 表示响应中无法解析用量，**不会**按预扣金额入账，系统会退回预扣额度。
 
 **渠道连通性：** 管理 API `POST /api/admin/channels/{id}/test`（界面「测试」）请求上游 `{base_url}/models`，不计费。
 

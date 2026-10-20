@@ -75,7 +75,7 @@ User UI  ──────► danmo-user
                  │
                  ├─ 协议相同且（方言相同 或 行是 opaque）──► 透传原字节
                  └─ 其他 ──► 入站方言解码到 IR ──► 上游方言编码
-响应 ──► 按字段特征解析 usage ──► 计费
+响应 ──► 按字段特征解析 usage ──► 结算（预扣已在转发前完成）
        └─ 透传：原厂方言已配置且渲染格式不同时，重写 usage
        └─ 转换：上游方言解码响应，入站方言编码
 ```
@@ -187,11 +187,42 @@ model_prices
 
 ## 用量与计费
 
-用量按响应里实际出现的字段匹配适配器，匹配不到则计费失败：退回预扣额度，日志状态为 `billing_failed`，非流式请求向客户端返回 502（不交付未计费的内容）。上游以 200 返回方言内的错误体（如 MiniMax `base_resp`）时同样记 `billing_failed`，但客户端收到的是该上游错误信息（`upstream_error`）。适配器有 `anthropic_messages`、`openai_responses`、`gemini`、`deepseek_chat`、`qianfan_chat`、`kimi_chat`、`embeddings`、`openai_chat`。
+Relay 对每个成功转发的请求做 **预扣 → 解析 usage → 结算（多退少补）**。没有「缺 usage 就按预扣当最终账单」的兜底。
 
-方言决定返回给客户端的形状：原厂方言已配置时，usage 渲染成该方言的字段集；未配置时透传路径保持上游原样。MiniMax 的 `base_resp` 非零状态码是软错误，只在 `minimax` 和 `opaque` 方言上检查。
+### 流程
 
-额度：
+```text
+鉴权、解析 body
+    │
+    ▼
+预扣 pre_consume ──► 用户 used_quota ↑、令牌 remain_quota ↓（无限额令牌只动用户侧）
+    │                  金额 = estimate_pre_consume（见下），不足则 402/额度错误，不上游
+    ▼
+选路、转发上游
+    │
+    ▼
+从上游原始响应提取 usage ──► match_usage（按字段特征选适配器）
+    │
+    ├─ 成功 ──► settle：按公式算 actual_quota，库内再改 delta = actual − pre_consumed
+    │           调用日志 status = success，记录 quota 与 raw_usage
+    │
+    └─ 失败 ──► refund：退回整笔 pre_consumed
+                调用日志 status = billing_failed
+                非流式：502，不向客户端交付无法计费的 JSON 体
+                流式：客户端可能已收到部分 chunk；后台仍退预扣（relay 会在客户端断开后继续读上游以尽量拿到 usage）
+```
+
+**预扣估算**（`crates/core/src/billing.rs`）：用请求体里第一个存在的上限字段——`max_tokens`、`max_completion_tokens`、`max_output_tokens`、`generationConfig.maxOutputTokens`（与入站协议无关，统一从 JSON 指针读取）。**都没传**时按 **1024** 计，并 clamp 在 1～128000。估算假设 prompt ≈ 上限的一半、completion = 上限，再乘该模型的 `model_ratio` 与分组 `group_ratio`，向上取整，至少 1。**不是**按模型 catalog 的最大 context 预扣，也**不等于**最终按 token 计价的金额。
+
+**结算**只认上游返回、且能被适配器解析的用量；结算时再用 `model_prices` 上的倍率、阶梯与时段（见下）。预扣只是占位，最终以 `actual_quota` 为准。
+
+### 用量解析与失败
+
+用量按响应里实际出现的字段匹配适配器，匹配不到则计费失败（见上流程）。上游以 200 返回方言内的错误体（如 MiniMax `base_resp`）时同样记 `billing_failed`，但客户端收到的是该上游错误信息（`upstream_error`）。适配器有 `anthropic_messages`、`openai_responses`、`gemini`、`deepseek_chat`、`qianfan_chat`、`kimi_chat`、`embeddings`、`openai_chat`。
+
+方言决定返回给客户端的形状：原厂方言已配置时，usage 渲染成该方言的字段集；未配置时透传路径保持上游原样。MiniMax 的 `base_resp` 非零状态码是软错误，只在 `minimax` 和 `opaque` 方言上检查。Chat 流式且渠道开启 `inject_stream_usage` 时，客户端未带 `stream_options.include_usage` 也会代注入，以便上游返回可计费用量。
+
+### 额度公式
 
 ```text
 (未命中缓存的输入
@@ -201,7 +232,7 @@ model_prices
 + 搜索次数 × search_price
 ```
 
-再乘分组倍率，向上取整。推理 token 已包含在输出里。`tiers` 按输入长度换一组倍率，`periods` 是 UTC 时间窗口的系数。请求开始时按 `max_tokens` 预扣，结束后按实际 usage 结算。
+再乘分组倍率，向上取整。推理 token 已包含在输出里。`tiers` 按输入长度换一组倍率，`periods` 是 UTC 时间窗口的系数。
 
 ## 用户注册验证码
 
