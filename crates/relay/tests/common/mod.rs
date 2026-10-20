@@ -97,9 +97,16 @@ impl Harness {
     /// Stream settlement runs after the body ends, so poll for the log row.
     pub async fn last_log(&self) -> LogEntry {
         for _ in 0..100 {
-            let logs = log_svc::list_logs(&self.pool, Some(self.user_id), 1, 0)
-                .await
-                .unwrap();
+            let logs = log_svc::list_logs(
+                &self.pool,
+                &log_svc::LogQuery {
+                    user_id: Some(self.user_id),
+                    limit: 1,
+                    ..log_svc::LogQuery::default()
+                },
+            )
+            .await
+            .unwrap();
             if let Some(l) = logs.into_iter().next() {
                 return l;
             }

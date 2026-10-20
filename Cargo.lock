@@ -416,6 +416,7 @@ dependencies = [
  "axum-extra",
  "cookie",
  "danmo-core",
+ "reqwest",
  "serde",
  "serde_json",
  "time",

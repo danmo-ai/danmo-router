@@ -116,3 +116,33 @@ pub async fn adjust_quota(pool: &DbPool, id: i64, delta: i64) -> AppResult<User>
         .await?;
     get_by_id(pool, id).await
 }
+
+pub async fn set_password(pool: &DbPool, id: i64, password: &str) -> AppResult<()> {
+    if password.len() < 6 {
+        return Err(AppError::BadRequest(
+            "password must be at least 6 characters".into(),
+        ));
+    }
+    let _ = get_by_id(pool, id).await?;
+    let password_hash = crypto::hash_password(password).map_err(AppError::Other)?;
+    sqlx::query("UPDATE users SET password_hash = ?, updated_at = datetime('now') WHERE id = ?")
+        .bind(password_hash)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn change_password(
+    pool: &DbPool,
+    id: i64,
+    old_password: &str,
+    new_password: &str,
+) -> AppResult<()> {
+    let user = get_by_id(pool, id).await?;
+    let ok = crypto::verify_password(old_password, &user.password_hash).map_err(AppError::Other)?;
+    if !ok {
+        return Err(AppError::Unauthorized("invalid password".into()));
+    }
+    set_password(pool, id, new_password).await
+}
