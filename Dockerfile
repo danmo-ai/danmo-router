@@ -5,7 +5,8 @@
 #   docker build --target user  -t danmo-user .
 #   docker build --target edge  -t danmo-edge .
 
-ARG RUST_VERSION=1.88
+# Keep in sync with deps' MSRV (e.g. uuid 1.28 needs rustc >= 1.89).
+ARG RUST_VERSION=1.89
 ARG NODE_VERSION=22
 
 FROM rust:${RUST_VERSION}-bookworm AS rust-builder
