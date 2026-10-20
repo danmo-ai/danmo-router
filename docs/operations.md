@@ -9,6 +9,7 @@
 | 协议、方言、计费、数据模型 | [architecture.md](architecture.md) |
 | `CB_*` / `RL_*`、选路与熔断日志 | [channel-health.md](channel-health.md) |
 | 与同类项目对比 | [comparison.md](comparison.md) |
+| 合法授权、可接受使用与责任边界 | [compliance.md](compliance.md) |
 | 本地开发与 Makefile | [README.md](../README.md) |
 | 环境变量模板 | [`.env.example`](../.env.example) |
 
@@ -41,6 +42,7 @@ User UI  ──────► danmo-user
 - [ ] `DATABASE_URL` 指向持久化路径或计划中的 Postgres（当前代码仍仅支持 SQLite）
 - [ ] `CORS_ORIGINS` 为 Portal 真实域名（逗号分隔，勿误用 `*` 与凭证 Cookie 组合）
 - [ ] `PUBLIC_RELAY_URL` 设为用户中心展示的 API 根（含 `/v1`，如 `https://api.example.com/v1`）
+- [ ] 构建 Portal 时按需设置 `VITE_COMPLIANCE_URL`（默认链到仓库 [compliance.md](compliance.md)；自托管时指向你的合规页 URL）
 - [ ] 反代对 relay **关闭响应缓冲**（流式 `SSE` / Gemini 流）
 - [ ] 负载均衡健康检查指向各进程的 `GET /healthz`
 - [ ] `RUST_LOG` 至少为 `info`；排障时可临时 `danmo_relay=debug`（模块名以 crate 为准，见下文日志）
