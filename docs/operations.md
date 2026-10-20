@@ -32,7 +32,7 @@ Client ──► LB ──► danmo-relay × N ──► upstream LLM
 Admin UI ──────► danmo-admin
 User UI  ──────► danmo-user
                       │
-                      └── 共享 DB（当前 SQLite WAL；多 relay 副本宜换网络 DB）
+                      └── 共享 DB（单机 SQLite WAL；多实例用 MySQL）
 ```
 
 ## 上线前检查清单
@@ -40,7 +40,7 @@ User UI  ──────► danmo-user
 - [ ] `SEED_DEMO=0`（生产禁止示例数据）
 - [ ] `ENCRYPTION_KEY` 为随机 64 位十六进制（32 字节），**所有进程一致**；勿使用 `.env.example` 默认值
 - [ ] `ADMIN_USERNAME` / `ADMIN_PASSWORD` 已修改；管理 API 仅内网或 VPN 可达
-- [ ] `DATABASE_URL` 指向持久化路径（当前 **sqlite://**；`mysql://` 即将支持，见 `migrations/mysql/`）
+- [ ] 数据库：单机用 `sqlite://` 持久路径；多 relay 副本或多主机用 `mysql://`（Compose 设 `DANMO_DATABASE_URL`，库需预先以 utf8mb4 创建）
 - [ ] `CORS_ORIGINS` 为 Portal 真实域名（逗号分隔，勿误用 `*` 与凭证 Cookie 组合）
 - [ ] `PUBLIC_RELAY_URL` 设为用户中心展示的 API 根（含 `/v1`，如 `https://api.example.com/v1`）
 - [ ] 构建 Portal 时按需设置 `VITE_COMPLIANCE_URL`（默认链到仓库 [compliance.md](compliance.md)；自托管时指向你的合规页 URL）
@@ -111,7 +111,7 @@ admin.example.com   ──► 云 LB ──► edge（静态 admin + /api → ad
 user.example.com    ──► 云 LB ──► edge（静态 user  + /api → user）
 ```
 
-**数据：** SQLite 使用 Compose 命名卷或云盘挂载到 `/data`；多 relay 副本仍受 SQLite 限制（见 [扩缩容与容量](#扩缩容与容量)）。Serverless 须挂载持久卷，不宜无状态冷启动 + 本地盘。
+**数据：** 单机 SQLite 使用 Compose 命名卷或云盘挂载到 `/data`。多 relay 副本、多主机或 Serverless 用托管 MySQL（RDS / Aurora MySQL / 云数据库 MySQL 8），各实例设同一 `DANMO_DATABASE_URL`，即可无状态横向扩容（见 [扩缩容与容量](#扩缩容与容量)）。
 
 **LB 探活：** HTTP `/healthz`。Compose 单机可探活 edge（`Host: api…`）或直连任务端口 3000（若平台把 relay 单独暴露在 VPC 内）。
 
@@ -131,7 +131,7 @@ user.example.com    ──► 云 LB ──► edge（静态 user  + /api → us
 | 入口 | **NLB** TCP 80/443 → edge |
 | 证书 | 数字证书管理服务（LB 或 edge） |
 
-SAE/ACK：分别部署四镜像或至少 `relay`+`edge`；共享 NAS/云盘给 SQLite；安全组勿对公网开放 3001/3002。
+SAE/ACK：分别部署四镜像或至少 `relay`+`edge`；多副本用 RDS MySQL（单机可用云盘给 SQLite）；安全组勿对公网开放 3001/3002。
 
 ### 腾讯云
 
@@ -152,7 +152,7 @@ SAE/ACK：分别部署四镜像或至少 `relay`+`edge`；共享 NAS/云盘给 S
 
 ### AWS
 
-**NLB** 或 ALB → ECS Fargate / App Runner 上的 edge；relay/admin/user 同 VPC 服务发现或 Compose on EC2。EFS/本地卷挂载 SQLite。App Runner / Fargate：拉长请求超时以支持 SSE。
+**NLB** 或 ALB → ECS Fargate / App Runner 上的 edge；relay/admin/user 同 VPC 服务发现或 Compose on EC2。多副本用 RDS / Aurora MySQL（单机可本地卷 SQLite）。App Runner / Fargate：拉长请求超时以支持 SSE。
 
 ### Google Cloud / Azure
 
@@ -182,7 +182,7 @@ GCP：Cloud Run / GCE + Compose；Azure：Container Apps / VM + Compose。LB 探
 |------|------|------|
 | `HOST` | `0.0.0.0` | 监听地址 |
 | `PORT` | 见上表 | 未设置时用各二进制默认端口 |
-| `DATABASE_URL` | `sqlite://data/danmo.db?mode=rwc` | 共享逻辑库；现仅 sqlite。`mysql://` 即将支持（迁移见 `migrations/mysql/`） |
+| `DATABASE_URL` | `sqlite://data/danmo.db?mode=rwc` | 共享逻辑库：`sqlite://`（单机）或 `mysql://user:pass@host:3306/danmo`（MySQL 8 / MariaDB 10.5+，多实例）。Compose 容器内由 `DANMO_DATABASE_URL` 覆盖，默认 `/data` 卷上的 SQLite |
 | `ENCRYPTION_KEY` | 开发用固定值 | 渠道 Key 加密、API Key HMAC、注册验证码密封；**变更后已存渠道密文不可解密** |
 | `RUST_LOG` | `info` | `tracing` 过滤器，如 `info,danmo_relay=debug` |
 | `CORS_ORIGINS` | localhost Portal | 逗号分隔 Origin |
@@ -215,7 +215,7 @@ GCP：Cloud Run / GCE + Compose；Azure：Container Apps / VM + Compose。LB 探
 默认值按自用 / 小团队设置：同一账号并发 5 个请求以上即会收到 429。入口 429 带 `Retry-After: 1`，客户端可据此退避。调参建议：
 
 - **对外服务**：`RELAY_USER_CONCURRENCY` 按单用户最大并行会话设（Agent 类客户端常见 8–32）；`RELAY_USER_QPS` 不低于并发数，否则并发档位用不满。
-- **实例总量**：`RELAY_INSTANCE_CONCURRENCY` 受上游连接与内存约束，流式请求会长时间占位；`RELAY_INSTANCE_QPS` 主要受 SQLite 写入能力约束（每请求 3 次短写：预扣、结算、调用日志）。
+- **实例总量**：`RELAY_INSTANCE_CONCURRENCY` 受上游连接与内存约束，流式请求会长时间占位；`RELAY_INSTANCE_QPS` 在 SQLite 下主要受单文件写锁约束（每请求 3 次短写：预扣、结算、调用日志）。
 - **旧式 Key**：`RELAY_LEGACY_*` 只限制「查库确认之前」的阶段，确认后改用账号额度；没有旧式 Key 时无需调整。
 
 ### 渠道健康（仅 relay 读取）
@@ -233,10 +233,18 @@ GCP：Cloud Run / GCE + Compose；Azure：Container Apps / VM + Compose。LB 探
 
 **优先扩 `danmo-relay`**：转发 CPU/网络 bound；admin/user 多为管理流量。
 
-**SQLite 限制：**
+**SQLite（单机）：**
 
-- 启动时启用 **WAL**、`busy_timeout=5s`，适合 **少量** relay + admin + user 共写同一文件。写事务一律以 `BEGIN IMMEDIATE` 开始，争用时在 `busy_timeout` 内排队；仍拿不到锁时 relay 返回 **503 + `Retry-After: 1`**，而不是 500。
-- **大量 relay 副本** 或高写入 QPS 时，应迁移到支持并发的网络数据库（代码中 Postgres 仍为 planned；当前 `DATABASE_URL=postgres://...` 会启动失败）。
+- 启动时启用 **WAL**、`busy_timeout=5s`，适合 **单主机** 上少量 relay + admin + user 共写同一文件。写事务一律以 `BEGIN IMMEDIATE` 开始，争用时在 `busy_timeout` 内排队；仍拿不到锁时 relay 返回 **503 + `Retry-After: 1`**，而不是 500。
+- 文件库不能跨主机共享（NAS/NFS 上的 SQLite 锁不可靠）。
+
+**MySQL（多实例）：**
+
+- `DATABASE_URL=mysql://...`（Compose：`DANMO_DATABASE_URL`）。所有 relay / admin / user 副本指向同一库即可横向扩容，主机数不限。支持 MySQL 8 与 MariaDB 10.5+；库需预先创建：`CREATE DATABASE danmo CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;`。
+- 额度扣减用行锁（`SELECT ... FOR UPDATE`），多副本并发计费准确；锁等待超时 / 死锁同样返回 **503 + `Retry-After: 1`**。
+- 每个进程连接池上限 10，按副本数规划 `max_connections`。
+- 多个进程同时启动时，迁移经 `GET_LOCK('danmo_migrate')` 串行，只会执行一次。
+- SQLite 数据不会自动迁到 MySQL；切换时在新库上重新初始化（渠道、价格等需重新录入或自行导数）。Postgres 尚未支持（`postgres://` 启动即报错）。
 
 **Per-process 限额：** 若前面有 4 个 relay，单账号「全局」并发约为 `4 × RELAY_USER_CONCURRENCY`（各副本独立计数）。需要集群级限流时要在 LB 或外部网关补充策略。
 
@@ -257,7 +265,7 @@ GET /healthz
 ### 日志
 
 - 启动：`{service} listening on http://{addr}`
-- 数据库：`applied migration {version}`（升级后首次启动）
+- 数据库：`connected to {engine} database`；`applied {engine} migration {version}`（升级后首次启动，engine 为 `sqlite` / `mysql`）
 - Relay **进程内渠道健康**（`RUST_LOG=info`，与 LB 探活无关；机制见 [architecture.md — 渠道健康与选路](architecture.md#渠道健康与选路)）：
   - `channel ejected`
   - `probing ejected channel`
@@ -294,8 +302,8 @@ export DANMO_TAG=vX.Y.Z
 
 滚动时顺序建议先更新 admin/user，再更新 relay（或先扩新 relay 再摘旧实例）。
 
-3. **不要**用脚本重跑全部 SQL。进程启动时对当前引擎目录（现 **sqlite**）只应用 `schema_migrations` 中尚未记录的版本；MySQL 接通后加载 `migrations/mysql/`。
-4. 观察日志 `applied migration N`；失败则回滚镜像 tag 与库文件。
+3. **不要**用脚本重跑全部 SQL。进程启动时按 `DATABASE_URL` 选择引擎目录（`migrations/sqlite/` 或 `migrations/mysql/`），只应用 `schema_migrations` 中尚未记录的版本。
+4. 观察日志 `applied {engine} migration N`；失败则回滚镜像 tag 与库（SQLite 文件 / MySQL 备份）。
 
 新增 schema：**必须**新增编号 SQL 文件（见 [AGENTS.md](../AGENTS.md) 与 [`crates/core/migrations/README.md`](../crates/core/migrations/README.md)），禁止改已发布的旧文件。
 
@@ -312,14 +320,20 @@ docker compose run --rm --no-deps -v danmo_danmo-data:/data:ro alpine \
 # 或在仅一个写进程时拷贝卷内 danmo.db（含 -wal/-shm 或先 checkpoint）
 ```
 
+**MySQL：** 用云数据库自带的自动备份 / 快照，或：
+
+```bash
+mysqldump --single-transaction --routines danmo > danmo-$(date +%F).sql
+```
+
 **必须一并安全保管：**
 
 - `ENCRYPTION_KEY`（丢失则渠道上游 Key 无法解密）
 - `.env` 中的管理员与 CORS 等配置
 
-**恢复：** `docker compose down` → 还原卷内数据库文件 → 确认 `ENCRYPTION_KEY` 一致 → `docker compose up -d`。
+**恢复：** `docker compose down` → 还原卷内数据库文件（或把 dump 导回 MySQL）→ 确认 `ENCRYPTION_KEY` 一致 → `docker compose up -d`。
 
-**演示数据重置：** 删除 SQLite 文件后设 `SEED_DEMO=1` 可重新生成示例（仅开发/演示环境）。
+**演示数据重置：** 删除 SQLite 文件（MySQL 则清空库）后设 `SEED_DEMO=1` 可重新生成示例（仅开发/演示环境）。
 
 ## 安全运维
 
@@ -342,8 +356,9 @@ docker compose run --rm --no-deps -v danmo_danmo-data:/data:ro alpine \
 | 流式中断 / 客户端超时 | 反代缓冲或超时过短 | Nginx `proxy_buffering off`、加大 `proxy_read_timeout` |
 | `billing_failed` | 上游响应无可用 usage 字段 | 检查模型/方言配置；见 [architecture.md — 用量与计费](architecture.md#用量与计费) |
 | 多 relay 行为不一致 | 渠道健康与限额均 per-process | 预期行为；关键 Key 401/403 请人工禁用渠道 |
-| 启动报 Postgres | 尚未支持 | 使用 `sqlite://` |
-| `database is locked` / 503 `database_busy` | SQLite 写锁等待超过 `busy_timeout` | 降低 `RELAY_INSTANCE_QPS`、减少写并发进程数或迁移数据库 |
+| 启动报 Postgres | 尚未支持 | 使用 `sqlite://` 或 `mysql://` |
+| MySQL 启动报 `Unknown database` / 连接拒绝 | 库未创建或账号无权限 | 先 `CREATE DATABASE ... utf8mb4`，授予该库 DDL+DML 权限 |
+| `database is locked` / 503 `database_busy` | SQLite 写锁等待超过 `busy_timeout`，或 MySQL 锁等待超时 / 死锁 | SQLite：降低 `RELAY_INSTANCE_QPS`、减少写并发进程数或改用 MySQL；MySQL：查慢事务与热点账号 |
 
 ## 日常运维任务
 
