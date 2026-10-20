@@ -212,6 +212,12 @@ GCP：Cloud Run / GCE + Compose；Azure：Container Apps / VM + Compose。LB 探
 | `RELAY_LEGACY_QPS` | `10` | 旧式 Key 查库前 QPS |
 | `PUBLIC_RELAY_URL` | 空 | 用户 Portal 展示的 API 地址 |
 
+默认值按自用 / 小团队设置：同一账号并发 5 个请求以上即会收到 429。入口 429 带 `Retry-After: 1`，客户端可据此退避。调参建议：
+
+- **对外服务**：`RELAY_USER_CONCURRENCY` 按单用户最大并行会话设（Agent 类客户端常见 8–32）；`RELAY_USER_QPS` 不低于并发数，否则并发档位用不满。
+- **实例总量**：`RELAY_INSTANCE_CONCURRENCY` 受上游连接与内存约束，流式请求会长时间占位；`RELAY_INSTANCE_QPS` 主要受 SQLite 写入能力约束（每请求约 3–4 次短写事务）。
+- **旧式 Key**：`RELAY_LEGACY_*` 只限制「查库确认之前」的阶段，确认后改用账号额度；没有旧式 Key 时无需调整。
+
 ### 渠道健康（仅 relay 读取）
 
 | 变量 | 默认 |
@@ -229,7 +235,7 @@ GCP：Cloud Run / GCE + Compose；Azure：Container Apps / VM + Compose。LB 探
 
 **SQLite 限制：**
 
-- 启动时启用 **WAL**、`busy_timeout=5s`，适合 **少量** relay + admin + user 共写同一文件。
+- 启动时启用 **WAL**、`busy_timeout=5s`，适合 **少量** relay + admin + user 共写同一文件。写事务一律以 `BEGIN IMMEDIATE` 开始，争用时在 `busy_timeout` 内排队；仍拿不到锁时 relay 返回 **503 + `Retry-After: 1`**，而不是 500。
 - **大量 relay 副本** 或高写入 QPS 时，应迁移到支持并发的网络数据库（代码中 Postgres 仍为 planned；当前 `DATABASE_URL=postgres://...` 会启动失败）。
 
 **Per-process 限额：** 若前面有 4 个 relay，单账号「全局」并发约为 `4 × RELAY_USER_CONCURRENCY`（各副本独立计数）。需要集群级限流时要在 LB 或外部网关补充策略。
@@ -337,7 +343,7 @@ docker compose run --rm --no-deps -v danmo_danmo-data:/data:ro alpine \
 | `billing_failed` | 上游响应无可用 usage 字段 | 检查模型/方言配置；见 [architecture.md — 用量与计费](architecture.md#用量与计费) |
 | 多 relay 行为不一致 | 渠道健康与限额均 per-process | 预期行为；关键 Key 401/403 请人工禁用渠道 |
 | 启动报 Postgres | 尚未支持 | 使用 `sqlite://` |
-| `database is locked` | SQLite 争用过重 | 减少写并发进程数或迁移数据库 |
+| `database is locked` / 503 `database_busy` | SQLite 写锁等待超过 `busy_timeout` | 降低 `RELAY_INSTANCE_QPS`、减少写并发进程数或迁移数据库 |
 
 ## 日常运维任务
 
