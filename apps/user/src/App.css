@@ -19,6 +19,14 @@ a {
 
 .layout {
   min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.layout-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
 }
 
 header {
@@ -58,9 +66,45 @@ header nav a:hover {
 }
 
 main {
+  flex: 1;
   padding: 28px 24px;
   max-width: 1100px;
   margin: 0 auto;
+  width: 100%;
+}
+
+.site-legal {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  padding: 14px 24px;
+  max-width: 1100px;
+  margin: 0 auto;
+  width: 100%;
+  font-size: 12px;
+  color: #64748b;
+  border-top: 1px solid #e2e8f0;
+}
+
+.site-legal .legal-link {
+  color: #1d4ed8;
+}
+
+.site-legal .legal-link:hover {
+  text-decoration: underline;
+}
+
+.legal-notice {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.legal-notice a {
+  color: #1d4ed8;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .auth-page {
