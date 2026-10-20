@@ -3,6 +3,7 @@
 多协议 LLM 中转站：Chat、Responses、Messages、Gemini、Embeddings 转发，管理 Portal 和用户 Portal。客户端按模型看到的协议行为与原厂一致；渠道按每个模型配置上游方言。
 
 - 设计：[docs/architecture.md](docs/architecture.md)
+- **运维（部署、配置、升级、备份、排障）：[docs/operations.md](docs/operations.md)**
 - 与 One API、New API、LiteLLM、GPT-Load、Sub2API 等的客观对比：[docs/comparison.md](docs/comparison.md)
 - relay 渠道熔断与 429 降权（`CB_*` / `RL_*`）：[docs/channel-health.md](docs/channel-health.md)
 
@@ -127,26 +128,12 @@ make run-all-in-one
 
 ## 生产部署（拆分）
 
-1. `make package` 或使用 GitHub Release 产物  
-2. 三台/三组进程共用同一 `DATABASE_URL`、`ENCRYPTION_KEY`  
-3. 反代：
-   - `api.example.com` → `danmo-relay`（开启 `proxy_buffering off`）
-   - `admin-api.example.com` → `danmo-admin`
-   - `user-api.example.com` → `danmo-user`
-4. 静态托管 `apps/admin/dist`、`apps/user/dist`，`/api` 指到对应 API  
-5. `CORS_ORIGINS` 填 Portal 真实域名  
+步骤、反代、systemd、健康检查与升级备份见 **[docs/operations.md](docs/operations.md)**。简要：
 
-systemd 示例（relay）：
-
-```ini
-[Service]
-EnvironmentFile=/opt/danmo/.env
-Environment=PORT=3000
-ExecStart=/opt/danmo/bin/danmo-relay
-Restart=always
-```
-
-admin / user 同理，改 `PORT` 与二进制名。
+1. `make package` 或 GitHub Release 产物  
+2. 三组进程共用 `DATABASE_URL`、`ENCRYPTION_KEY`  
+3. `api.example.com` → relay（流式需 `proxy_buffering off`）；admin/user API 与 Portal 分域名  
+4. `CORS_ORIGINS`、`PUBLIC_RELAY_URL` 按真实域名配置  
 
 ## CI / Release
 
@@ -159,7 +146,7 @@ git tag v0.1.0 && git push origin v0.1.0
 
 ## 环境变量
 
-见 [`.env.example`](.env.example)。`PORT` 未设置时各二进制使用上表默认端口。
+见 [`.env.example`](.env.example) 与 **[运维指南 — 环境变量速查](docs/operations.md#环境变量速查)**。`PORT` 未设置时各二进制使用上表默认端口。
 
 `CB_*` / `RL_*` 等 relay 变量见 [渠道健康与选路](docs/channel-health.md#环境变量)。
 

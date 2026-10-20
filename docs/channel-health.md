@@ -66,6 +66,8 @@ weighted_shuffle_by_priority（同优先级内按 effective_weight 随机）
 
 ## 运维提示
 
+统一排障与部署说明见 **[operations.md](operations.md)**。本节仅列健康相关日志：
+
 - 观察 relay 日志：`channel ejected`、`probing ejected channel`、`channel rate limited`、`every channel is ejected, ignoring circuit breakers`。
 - 多副本时若需「全局一致」的禁用状态，当前方案** intentionally 未做**（无 Redis/写库）；若某 key 长期 401，渠道不会被熔断，需人工禁用渠道。
 - 后续可选：只读 HTTP 暴露内存健康表、401 可选立即熔断、长期踢出后写 `auto_disabled`（见架构文档「边界」）。
