@@ -12,7 +12,7 @@ danmo-router-v0.3.1-x86_64-unknown-linux-gnu/
   .env.example
   apps/admin/              # 管理 Portal 静态资源
   apps/user/               # 用户 Portal 静态资源
-  deploy/                  # Nginx / systemd / setup-nginx.sh
+  deploy/                  # install.sh / upgrade.sh / Nginx / systemd
   packages/                # 按角色分包（见 packages/README.md）
   RELEASE-LAYOUT.md        # 本说明
 ```
