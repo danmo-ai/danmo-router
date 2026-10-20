@@ -1,4 +1,5 @@
 pub mod billing;
+pub mod captcha;
 pub mod config;
 pub mod crypto;
 pub mod db;

@@ -18,6 +18,7 @@ use time::Duration;
 
 pub fn router(state: UserState) -> Router {
     Router::new()
+        .route("/api/user/captcha", get(captcha))
         .route("/api/user/register", post(register))
         .route("/api/user/login", post(login))
         .route("/api/user/logout", post(logout))
@@ -42,10 +43,38 @@ struct AuthBody {
     password: String,
 }
 
+#[derive(Deserialize)]
+struct RegisterBody {
+    username: String,
+    password: String,
+    captcha_token: String,
+    captcha_answer: String,
+}
+
+async fn captcha(State(state): State<UserState>) -> ApiResult<impl IntoResponse> {
+    let challenge = danmo_core::captcha::issue(&state.config.encryption_key)?;
+    Ok(Json(json!({
+        "success": true,
+        "data": {
+            "token": challenge.token,
+            "image_svg": challenge.image_svg,
+        }
+    })))
+}
+
 async fn register(
     State(state): State<UserState>,
-    Json(body): Json<AuthBody>,
+    Json(body): Json<RegisterBody>,
 ) -> ApiResult<impl IntoResponse> {
+    let nonce = danmo_core::captcha::verify(
+        &state.config.encryption_key,
+        &body.captcha_token,
+        &body.captcha_answer,
+    )?;
+    if state.captcha_replay.consume(&nonce) {
+        return Err(danmo_core::AppError::BadRequest("captcha expired or invalid".into()).into());
+    }
+
     let user = user_svc::create_user(
         &state.pool,
         &body.username,

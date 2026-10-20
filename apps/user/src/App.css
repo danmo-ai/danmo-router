@@ -179,6 +179,37 @@ button.danger {
   border-radius: 8px;
 }
 
+.captcha-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+.captcha-answer {
+  flex: 1;
+  min-width: 0;
+}
+
+.captcha-image {
+  flex: 0 0 auto;
+  min-width: 160px;
+  min-height: 48px;
+  padding: 0;
+  line-height: 0;
+  overflow: hidden;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #f1f5f9;
+  display: grid;
+  place-items: center;
+}
+
+.captcha-image img {
+  display: block;
+  width: 160px;
+  height: 48px;
+}
+
 .success {
   background: #ecfdf5;
   color: #047857;

@@ -12,7 +12,7 @@ danmo-router 是一个多协议 LLM 中转站。客户端按路径选择协议�
 |--------|----------|------|
 | `danmo-relay` | 3000 | 鉴权、路由、转发、计费 |
 | `danmo-admin` | 3001 | 渠道、用户、价格、日志 |
-| `danmo-user` | 3002 | 注册、令牌、自己的日志 |
+| `danmo-user` | 3002 | 注册（自托管图形验证码）、令牌、自己的日志 |
 | `danmo-router` | 3000 | 本地一体进程 |
 
 ```text
@@ -202,6 +202,10 @@ model_prices
 ```
 
 再乘分组倍率，向上取整。推理 token 已包含在输出里。`tiers` 按输入长度换一组倍率，`periods` 是 UTC 时间窗口的系数。请求开始时按 `max_tokens` 预扣，结束后按实际 usage 结算。
+
+## 用户注册验证码
+
+自托管图形验证码，**不写数据库**：答案与过期时间用 `ENCRYPTION_KEY`（AES-GCM）封进一次性 token；`GET /api/user/captcha` 下发 SVG，`POST /api/user/register` 校验答案。本进程内存记录已用 nonce 防重放；多副本 `danmo-user` 在 TTL 内可能各用一次同 token，生产用户面通常单实例即可。
 
 ## 管理端
 
