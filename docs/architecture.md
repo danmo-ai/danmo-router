@@ -2,7 +2,7 @@
 
 danmo-router 是一个多协议 LLM 中转站。客户端按路径选择协议；每个模型在每个协议上有一个原厂方言；每条渠道的每个模型有一个上游方言。两端协议和方言相同就透传原字节，否则经中间表示转换。用量按响应字段特征解析后计费。
 
-和其他开源中转站 / 网关（One API、New API、LiteLLM、GPT-Load、Sub2API 等）的定位与能力对照见 [comparison.md](comparison.md)。
+和其他开源中转站 / 网关（One API、New API、LiteLLM、GPT-Load、Sub2API 等）的定位与能力对照见 [comparison.md](comparison.md)。部署、升级、备份与排障见 **[operations.md](operations.md)**。
 
 ## 进程
 
