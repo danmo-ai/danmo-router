@@ -12,6 +12,18 @@ pub struct Config {
     pub admin_password: String,
     pub default_user_quota: i64,
     pub relay_max_retries: u32,
+    /// In-flight requests one account may hold on this process.
+    pub relay_user_concurrency: u32,
+    /// In-flight verified requests this process accepts in total.
+    pub relay_instance_concurrency: u32,
+    /// Sustained verified requests per second for one account on this process.
+    pub relay_user_qps: u32,
+    /// Sustained verified requests per second for this process.
+    pub relay_instance_qps: u32,
+    /// In-flight legacy (unsigned) keys this process will look up, in total.
+    pub relay_legacy_concurrency: u32,
+    /// Sustained legacy-key lookups per second on this process.
+    pub relay_legacy_qps: u32,
     pub session_ttl_hours: i64,
     pub cors_origins: Vec<String>,
 }
@@ -64,12 +76,26 @@ impl Config {
                 .unwrap_or_else(|_| "2".into())
                 .parse()
                 .context("invalid RELAY_MAX_RETRIES")?,
+            relay_user_concurrency: env_u32("RELAY_USER_CONCURRENCY", 4)?,
+            relay_instance_concurrency: env_u32("RELAY_INSTANCE_CONCURRENCY", 32)?,
+            relay_user_qps: env_u32("RELAY_USER_QPS", 5)?,
+            relay_instance_qps: env_u32("RELAY_INSTANCE_QPS", 50)?,
+            relay_legacy_concurrency: env_u32("RELAY_LEGACY_CONCURRENCY", 4)?,
+            relay_legacy_qps: env_u32("RELAY_LEGACY_QPS", 10)?,
             session_ttl_hours: env::var("SESSION_TTL_HOURS")
                 .unwrap_or_else(|_| "168".into())
                 .parse()
                 .context("invalid SESSION_TTL_HOURS")?,
             cors_origins,
         })
+    }
+}
+
+fn env_u32(name: &str, default: u32) -> Result<u32> {
+    match env::var(name) {
+        Err(_) => Ok(default),
+        Ok(value) if value.is_empty() => Ok(default),
+        Ok(value) => value.parse().with_context(|| format!("invalid {name}")),
     }
 }
 

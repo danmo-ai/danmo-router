@@ -1,3 +1,4 @@
+use crate::admit::{Admitter, Limits};
 use danmo_core::{Config, DbPool};
 use reqwest::Client;
 use std::sync::Arc;
@@ -7,6 +8,7 @@ pub struct RelayState {
     pub pool: DbPool,
     pub config: Arc<Config>,
     pub http: Client,
+    pub admit: Admitter,
 }
 
 impl RelayState {
@@ -15,6 +17,24 @@ impl RelayState {
             .timeout(std::time::Duration::from_secs(120))
             .build()
             .expect("http client");
-        Self { pool, config, http }
+        let admit = Admitter::new(Limits::from_config(&config));
+        Self {
+            pool,
+            config,
+            http,
+            admit,
+        }
+    }
+
+    pub fn user_in_flight(&self, user_id: i64) -> u32 {
+        self.admit.user_in_flight(user_id)
+    }
+
+    pub fn instance_in_flight(&self) -> u32 {
+        self.admit.instance_in_flight()
+    }
+
+    pub fn legacy_in_flight(&self) -> u32 {
+        self.admit.legacy_in_flight()
     }
 }

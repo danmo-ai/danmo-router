@@ -20,6 +20,7 @@ pub const USER_QUOTA: i64 = 10_000_000;
 pub struct Harness {
     pub pool: DbPool,
     pub config: Arc<Config>,
+    pub state: RelayState,
     pub mock: MockServer,
     pub key: String,
     pub user_id: i64,
@@ -28,22 +29,47 @@ pub struct Harness {
 
 impl Harness {
     pub async fn new() -> Self {
+        Self::build(|config| {
+            config.relay_user_concurrency = 1_000_000;
+            config.relay_instance_concurrency = 1_000_000;
+            config.relay_user_qps = 1_000_000;
+            config.relay_instance_qps = 1_000_000;
+            config.relay_legacy_concurrency = 1_000_000;
+            config.relay_legacy_qps = 1_000_000;
+        })
+        .await
+    }
+
+    pub async fn build(tune: impl FnOnce(&mut Config)) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("relay.db");
         let mut config = Config::from_env().unwrap();
         config.database_url = format!("sqlite://{}?mode=rwc", db_path.display());
         config.relay_max_retries = 2;
+        tune(&mut config);
         let config = Arc::new(config);
         let pool = connect(&config).await.unwrap();
         let user = user_svc::create_user(&pool, "u1", "secret1", "user", USER_QUOTA, "default")
             .await
             .unwrap();
-        let created = token_svc::create_token(&pool, user.id, "tok", -1, true, None, "", None)
-            .await
-            .unwrap();
+        let created = token_svc::create_token(
+            &pool,
+            &config.encryption_key,
+            user.id,
+            "tok",
+            -1,
+            true,
+            None,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+        let state = RelayState::new(pool.clone(), config.clone());
         Self {
             pool,
             config,
+            state,
             mock: MockServer::start().await,
             key: created.raw_key,
             user_id: user.id,
@@ -72,7 +98,7 @@ impl Harness {
         headers: &[(&str, String)],
         body: impl Into<String>,
     ) -> (StatusCode, HeaderMap, Bytes) {
-        let app = danmo_relay::router(RelayState::new(self.pool.clone(), self.config.clone()));
+        let app = danmo_relay::router(self.state.clone());
         let mut req = axum::http::Request::builder()
             .method("POST")
             .uri(uri)

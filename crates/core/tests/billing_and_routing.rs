@@ -27,9 +27,19 @@ async fn token_auth_and_billing_settle_refund() {
     let user = user_svc::create_user(&pool, "alice", "secret1", "user", 10_000, "default")
         .await
         .unwrap();
-    let created = token_svc::create_token(&pool, user.id, "t1", -1, true, None, "", None)
-        .await
-        .unwrap();
+    let created = token_svc::create_token(
+        &pool,
+        &config.encryption_key,
+        user.id,
+        "t1",
+        -1,
+        true,
+        None,
+        "",
+        None,
+    )
+    .await
+    .unwrap();
 
     let auth = token_svc::authenticate_api_key(&pool, &created.raw_key)
         .await
@@ -121,13 +131,23 @@ async fn token_auth_and_billing_settle_refund() {
 
 #[tokio::test]
 async fn insufficient_quota_rejected() {
-    let (pool, _config, _dir) = setup().await;
+    let (pool, config, _dir) = setup().await;
     let user = user_svc::create_user(&pool, "bob", "secret1", "user", 1, "default")
         .await
         .unwrap();
-    let created = token_svc::create_token(&pool, user.id, "t1", -1, true, None, "", None)
-        .await
-        .unwrap();
+    let created = token_svc::create_token(
+        &pool,
+        &config.encryption_key,
+        user.id,
+        "t1",
+        -1,
+        true,
+        None,
+        "",
+        None,
+    )
+    .await
+    .unwrap();
     let auth = token_svc::authenticate_api_key(&pool, &created.raw_key)
         .await
         .unwrap();

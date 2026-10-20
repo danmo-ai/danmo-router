@@ -134,6 +134,7 @@ async fn create_token(
 ) -> ApiResult<Json<Value>> {
     let created = token_svc::create_token(
         &state.pool,
+        &state.config.encryption_key,
         user.id,
         &body.name,
         body.remain_quota,
