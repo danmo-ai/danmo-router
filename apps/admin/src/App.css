@@ -53,12 +53,41 @@ aside nav a:hover {
   background: #1e293b;
 }
 
-.aside-footer {
+.aside-bottom {
   margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid #1e293b;
+}
+
+.aside-bottom .legal-link {
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.aside-bottom .legal-link:hover {
+  color: #e2e8f0;
+}
+
+.aside-footer {
   display: flex;
   justify-content: space-between;
   align-items: center;
   font-size: 14px;
+}
+
+.legal-notice {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.legal-notice a {
+  color: #2563eb;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 main {

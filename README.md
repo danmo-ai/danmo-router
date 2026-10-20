@@ -141,6 +141,7 @@ make run-all-in-one
    - `user-api.example.com` → `danmo-user`
 4. 静态托管 `apps/admin/dist`、`apps/user/dist`，`/api` 指到对应 API  
 5. `CORS_ORIGINS` 填 Portal 真实域名  
+6. 构建 Portal 时可设 `VITE_COMPLIANCE_URL` 指向自托管的 [合规说明](docs/compliance.md)（默认链到 GitHub 文档）；页脚与登录页会展示链接  
 
 systemd 示例（relay）：
 
