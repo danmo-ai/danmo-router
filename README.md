@@ -81,15 +81,13 @@ User UI  ──────► danmo-user  × 1..N
 ## Makefile
 
 ```bash
-make help           # 查看全部目标
-make test           # 测试
-make release        # 编译三个拆分二进制 + all-in-one
-make run-relay      # 启动转发 :3000
-make run-admin      # 启动管理 API :3001
-make run-user       # 启动用户 API :3002
-make portals-build  # 构建两个 Portal
-make package        # 产出 dist/bin + dist/apps
-make check          # fmt + clippy + test（对齐 CI）
+make help              # 全部目标
+make check             # fmt + clippy + test（对齐 CI）
+make release           # 编译二进制
+make package           # dist/ + dist/packages/（含 Portal 与 deploy）
+make run-relay|admin|user
+make portals-dev-admin # :5173
+make portals-dev-user  # :5174
 ```
 
 ## 本地开发

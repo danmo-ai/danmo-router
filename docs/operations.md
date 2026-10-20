@@ -439,12 +439,9 @@ cp /path/to/danmo.db /backup/danmo-$(date +%F).db
 
 ```bash
 make help
-make package          # 生产目录布局
-make run-relay        # 本地 relay :3000
-make run-admin        # 本地 admin :3001
-make run-user         # 本地 user :3002
-make portals-build    # 构建 Portal 静态文件
-make check            # 与 CI 相同检查
+make check            # fmt + clippy + test
+make package          # dist/ + packages/（二进制、Portal、deploy）
+make run-relay|admin|user
 ```
 
 ---
