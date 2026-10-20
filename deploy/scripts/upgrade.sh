@@ -9,12 +9,16 @@
 #   4. PREFIX/danmo-install.conf when --prefix= is set
 #   5. fallback PREFIX=/opt/danmo ROLE=all
 #
-# Usage:
-#   sudo ./upgrade.sh --from-dir=/path/to/extracted-release
-#   sudo ./upgrade.sh --from-dir=... --prefix=/opt/danmo-user --role=user
+# Usage (from inside an extracted release):
+#   sudo ./deploy/scripts/upgrade.sh
+#   sudo ./deploy/scripts/upgrade.sh --prefix=/opt/danmo-user --role=user
+#   sudo ./deploy/scripts/upgrade.sh --from-dir=/other/extracted-tree
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEPLOY_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# Release tarball root is parent of deploy/ (same layout as install.sh).
+PACKAGE_ROOT="$(cd "${DEPLOY_DIR}/.." && pwd)"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -40,15 +44,19 @@ USER_DOMAIN=""
 
 usage() {
   cat <<EOF
-Usage: sudo $0 --from-dir=DIR [options]
+Usage: sudo $0 [options]
 
-  --from-dir=DIR                Extracted release tree (required)
+  --from-dir=DIR                New release tree (default: this script's package root:
+                                  ${PACKAGE_ROOT})
   --prefix=DIR                  Install root (default: from install.conf, else /opt/danmo)
   --role=all|relay|admin|user   Components (default: from install.conf, else all)
   --config=FILE                 Install state file (default: ${INSTALL_STATE_DIR}/install.conf)
   --with-nginx                  Also re-run install.sh --nginx-only (rare)
   --backup-dir=DIR              Backup previous bin/apps (default: PREFIX/.upgrade-backup-TIMESTAMP)
   -h, --help
+
+Typical: wget + tar, then cd into the tree and run:
+  sudo ./deploy/scripts/upgrade.sh
 
 install.sh writes:
   \${PREFIX}/danmo-install.conf
@@ -75,8 +83,23 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 1
 fi
 
-if [[ -z "${FROM_DIR}" || ! -d "${FROM_DIR}" ]]; then
-  err "--from-dir must point to an extracted release directory"
+# Default: the extracted release that contains this script (…/deploy/scripts/upgrade.sh).
+if [[ -z "${FROM_DIR}" ]]; then
+  FROM_DIR="${PACKAGE_ROOT}"
+  info "Using --from-dir=${FROM_DIR} (package root of this script)"
+fi
+
+if [[ ! -d "${FROM_DIR}" ]]; then
+  err "--from-dir is not a directory: ${FROM_DIR}"
+  exit 1
+fi
+
+# Sanity: look like a release tree (binaries at root or under bin/ or packages/).
+if [[ ! -f "${FROM_DIR}/danmo-relay" && ! -f "${FROM_DIR}/bin/danmo-relay" \
+   && ! -f "${FROM_DIR}/packages/danmo-relay/bin/danmo-relay" \
+   && ! -f "${FROM_DIR}/danmo-admin" && ! -f "${FROM_DIR}/bin/danmo-admin" \
+   && ! -f "${FROM_DIR}/danmo-user" && ! -f "${FROM_DIR}/bin/danmo-user" ]]; then
+  err "No danmo-* binaries under ${FROM_DIR}; pass --from-dir= to the extracted release root."
   exit 1
 fi
 
