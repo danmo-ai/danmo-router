@@ -9,6 +9,7 @@
 | 系统设计（协议、方言、计费、渠道健康、`CB_*`/`RL_*`） | [architecture.md](architecture.md) |
 | 与同类项目对比 | [comparison.md](comparison.md) |
 | 合法授权、可接受使用与责任边界 | [compliance.md](compliance.md) |
+| Nginx / systemd 示例 | [deploy/README.md](../deploy/README.md)（`make package` → `dist/deploy/`） |
 | 本地开发与 Makefile | [README.md](../README.md) |
 | 环境变量模板 | [`.env.example`](../.env.example) |
 
@@ -52,8 +53,14 @@ User UI  ──────► danmo-user
 
 ```bash
 make package
-# 产出 dist/bin/{danmo-relay,danmo-admin,danmo-user} 与 dist/apps/{admin,user}
+# 完整 dist/：bin/、apps/{admin,user}、deploy/、.env.example
+# 按角色分包 dist/packages/：
+#   danmo-user-portal/   → bin/danmo-user + apps/user（用户 API + Portal 同一包）
+#   danmo-admin-portal/  → bin/danmo-admin + apps/admin
+#   danmo-relay/         → bin/danmo-relay
 ```
+
+小流量可 **一台机** 解压完整 `dist/`；分机时用户面只需拷贝 **`danmo-user-portal`** 到 `/opt/danmo-user`（管理面、relay 同理），仍共用一份 `.env` 中的数据库与 `ENCRYPTION_KEY`。
 
 **Release：** 推送 `v*` tag 触发 [`.github/workflows/release.yml`](../.github/workflows/release.yml)，GitHub Release 含多平台二进制 tar 与 Portal tar。
 
@@ -65,8 +72,18 @@ make check   # fmt + clippy + test
 
 ## 生产部署（拆分）
 
-1. 将 `dist/bin` 安装到统一路径（如 `/opt/danmo/bin`），`.env` 放在 `/opt/danmo/.env`。
-2. 三组 systemd（或容器）进程共享同一 `EnvironmentFile`，仅 `PORT` 与 `ExecStart` 二进制不同。
+**TLS 建议：** `danmo-relay` 仅提供 **HTTP**（默认 `:3000`）。公网 HTTPS 由 **前置 Nginx** 终结证书，再反代到 `127.0.0.1:3000`（或本机 `:3000`）；大流量与流式场景不要在 relay 进程内做 TLS。
+
+- **交互安装：** Release 包内 `dist/deploy/scripts/setup-nginx.sh`（需 root）— 引导输入 API/admin/user 域名与 `/opt/danmo` 路径，渲染 Nginx 配置；**不**自动申请证书，证书未就绪时会提示 `certbot` 命令。
+- **手工模板：** [`deploy/examples/nginx/`](../deploy/examples/nginx/)，Certbot 说明见 [`deploy/examples/nginx/README.md`](../deploy/examples/nginx/README.md)。
+
+```text
+Client ──TLS──► Nginx:443 ──HTTP──► danmo-relay:3000
+         （可选）四层 LB TCP:443 ──► 节点 Nginx:443
+```
+
+1. 将 `dist/bin` 安装到统一路径（如 `/opt/danmo/bin`），Portal 到 `/opt/danmo/apps/`，`.env` 放在 `/opt/danmo/.env`。
+2. systemd 模板见 [`deploy/examples/systemd/`](../deploy/examples/systemd/)；三组进程共享 `EnvironmentFile`，仅 `PORT` 与二进制不同。
 3. 反代示例：
 
 | 公网域名 | 后端 | 注意 |
@@ -77,31 +94,94 @@ make check   # fmt + clippy + test
 | 管理 Portal | 静态 `admin/dist`，`/api` → admin API | |
 | 用户 Portal | 静态 `user/dist`，`/api` → user API | |
 
-**systemd 示例（relay）：**
+完整 **Nginx** server 块（含 TLS、`/v1` 流式、`80` ACME）见 [`deploy/examples/nginx/danmo-relay.conf`](../deploy/examples/nginx/danmo-relay.conf)；Portal 见 `danmo-portal-admin.conf` / `danmo-portal-user.conf`。
 
-```ini
-[Service]
-EnvironmentFile=/opt/danmo/.env
-Environment=PORT=3000
-ExecStart=/opt/danmo/bin/danmo-relay
-Restart=always
-RestartSec=3
+## 云厂商平台部署
+
+按平台给出参考方案：**四层 LB** 承接 `danmo-relay`、**HTTP `/healthz`** 探活、**对象存储 + CDN** 发布 Portal（同源 `/api` 回源 admin/user）。下文「部署共性」适用于各云；其后分厂商列出对应产品名与控制台配置。
+
+### 部署共性
+
+**组件与域名**
+
+| 组件 | 进程/产物 | 典型端口 | 公网域名示例 |
+|------|-----------|----------|--------------|
+| 转发 | `danmo-relay` | 3000 | `api.example.com` |
+| 管理 API | `danmo-admin` | 3001 | 不直连公网，由 Portal 回源 |
+| 用户 API | `danmo-user` | 3002 | 不直连公网，由 Portal 回源 |
+| 管理 Portal | `apps/admin/dist` | — | `admin.example.com` |
+| 用户 Portal | `apps/user/dist` | — | `user.example.com` |
+
+```text
+api.example.com     ──► 云厂商「四层 LB」──► relay ECS/CVM × N :3000
+admin.example.com   ──► CDN ──► OSS/COS（静态）+ 回源 /api ──► admin :3001（内网/VPC）
+user.example.com    ──► CDN ──► OSS/COS（静态）+ 回源 /api ──► user  :3002（内网/VPC）
 ```
 
-admin / user 同理，改 `PORT` 与 `ExecStart` 中的二进制名。
+**实例内进程：** 各计算实例安装 Release 二进制，共享 `/opt/danmo/.env`。relay 节点只跑 relay；admin/user 可同机或分机。SQLite 库宜 **NAS/云盘共享** 或控制写并发（见 [扩缩容与容量](#扩缩容与容量)）。
 
-**Nginx relay 片段：**
+**LB 探活（与进程内渠道熔断无关）：**
 
-```nginx
-location / {
-    proxy_pass http://127.0.0.1:3000;
-    proxy_http_version 1.1;
-    proxy_set_header Connection "";
-    proxy_buffering off;
-    proxy_read_timeout 3600s;
-    proxy_send_timeout 3600s;
-}
-```
+| 字段 | relay | admin | user |
+|------|-------|-------|------|
+| 协议 | HTTP | HTTP | HTTP |
+| 端口 | 3000 | 3001 | 3002 |
+| 路径 | `/healthz` | `/healthz` | `/healthz` |
+
+**Portal 构建：** `npm ci && VITE_COMPLIANCE_URL=… npm run build`（admin/user 各一份）。浏览器请求相对路径 `/api/*` 且带 Cookie，**须** Portal 与 `/api` **同域名**（CDN 路径回源或七层反代）。
+
+**转发面用四层 LB：** Relay 含长连接 SSE/流式；四层 TCP 不分片缓冲 HTTP body。TLS 推荐 **LB TCP:443 → 实例 Nginx:443 → 127.0.0.1:3000**，示例见 [`deploy/examples/nginx/danmo-relay.conf`](../deploy/examples/nginx/danmo-relay.conf)。
+
+### 阿里云
+
+| 用途 | 产品 |
+|------|------|
+| relay | ECS（或 ACK 节点） |
+| 转发入口 | **NLB** TCP 443 |
+| Portal | **OSS** + **CDN** / **DCDN** |
+| 证书 | 数字证书管理服务 |
+
+NLB：后端 relay ECS，健康检查 HTTP 端口 **3000** 路径 **`/healthz`**；空闲超时尽量调大。安全组仅允许 NLB 网段访问 3000/443，**禁止** 0.0.0.0/0 访问 3001/3002。Portal：OSS 托管静态，CDN 配置 SPA 回源与 **`/api/*` 路径回源** 至内网 admin/user（或 ALB 七层统一域名）。`api.example.com` CNAME 到 NLB。
+
+### 腾讯云
+
+| 用途 | 产品 |
+|------|------|
+| relay | CVM |
+| 转发入口 | **网络 CLB** TCP:443 |
+| Portal | **COS** + **CDN** |
+
+健康检查 HTTP **3000** `/healthz`。COS+CDN 默认源站 COS，**`/api/` 独立回源** 至 admin/user 内网 CLB 或 CVM；或七层 CLB 上 Nginx 托管静态并 `location /api/` 反代。
+
+### 华为云
+
+**ELB 四层** TCP 443 → relay ECS，HTTP 探活 **3000** `/healthz`。**OBS + CDN**，`/api/*` 多源站回源至 admin/user 私网 ECS 或七层 ELB。
+
+### 火山引擎
+
+**四层 CLB** TCP 443，HTTP `/healthz`:3000。**TOS + CDN**，`/api/` 独立源站；`api.example.com` **勿经 CDN**。
+
+### AWS
+
+**NLB** TCP 443，Target group HTTP `/healthz` on **3000**，Deregistration delay 300–600s。**S3 + CloudFront**：默认行为走 S3 静态；**/api/\*** 第二 Origin 指向 admin/user（CachingDisabled）；`api.example.com` 单独指 NLB。EKS：relay `Service` LoadBalancer + `readinessProbe` `/healthz:3000`。
+
+### Google Cloud / Azure
+
+GCP：**Network LB** TCP 443，HTTP 探活 3000 `/healthz`；Portal 用 Cloud CDN + ALB URL map 分发 `/api/*`。Azure：**Standard Load Balancer** TCP 443 + HTTP probe；Portal 用 **Front Door** / Application Gateway 路由静态与 `/api/*`。
+
+### 平台选型速查
+
+| 平台 | 四层转发 | 静态 Portal | `/api` 回源 |
+|------|----------|-------------|-------------|
+| 阿里云 | NLB | OSS + CDN | CDN 路径回源 / ALB |
+| 腾讯云 | 网络 CLB | COS + CDN | CDN 多源站 / 七层 CLB |
+| 华为云 | ELB TCP | OBS + CDN | CDN → 内网 ECS/ELB |
+| 火山引擎 | CLB 四层 | TOS + CDN | CDN 独立源站 |
+| AWS | NLB | S3 + CloudFront | 第二 Origin |
+| GCP | Network LB | GCS + CDN | ALB URL map |
+| Azure | Load Balancer | Blob + Front Door | Front Door route |
+
+**云平台验收：** 仅四层 LB 公网暴露 relay；探活 `/healthz` 生效；API 域名不经 CDN；Portal 登录 Cookie 正常；`PUBLIC_RELAY_URL` 与 LB 域名一致。
 
 ## 云厂商平台部署
 

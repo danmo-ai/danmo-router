@@ -1,0 +1,19 @@
+[Unit]
+Description=danmo-relay LLM proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/opt/danmo/.env
+Environment=PORT=3000
+# 默认 HOST=0.0.0.0，供四层 LB 对 :3000 做 /healthz；用安全组限制仅 LB/内网可访问
+ExecStart=/opt/danmo/bin/danmo-relay
+Restart=always
+RestartSec=3
+
+# 可选：限制文件描述符
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

@@ -133,7 +133,7 @@ make run-all-in-one
 
 ## 生产部署（拆分）
 
-步骤、反代、systemd、健康检查与升级备份见 **[docs/operations.md](docs/operations.md)**。简要：
+步骤、Nginx 示例（`deploy/examples/`）、systemd、健康检查与升级备份见 **[docs/operations.md](docs/operations.md)**。简要：
 
 1. `make package` 或 GitHub Release 产物  
 2. 三组进程共用 `DATABASE_URL`、`ENCRYPTION_KEY`  

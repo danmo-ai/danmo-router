@@ -5,6 +5,7 @@ CARGO ?= cargo
 NPM ?= npm
 RELEASE_DIR := target/release
 DIST_DIR := dist
+PKG_DIR := $(DIST_DIR)/packages
 
 RELAY_PORT ?= 3000
 ADMIN_PORT ?= 3001
@@ -81,11 +82,21 @@ portals-dev-user: ## Dev user portal (:5174 → user API)
 package: release portals-build ## Assemble release artifacts under dist/
 	rm -rf $(DIST_DIR)
 	mkdir -p $(DIST_DIR)/bin $(DIST_DIR)/apps/admin $(DIST_DIR)/apps/user
+	mkdir -p $(PKG_DIR)/danmo-relay/bin
+	mkdir -p $(PKG_DIR)/danmo-admin-portal/bin $(PKG_DIR)/danmo-admin-portal/apps/admin
+	mkdir -p $(PKG_DIR)/danmo-user-portal/bin $(PKG_DIR)/danmo-user-portal/apps/user
 	cp $(RELEASE_DIR)/danmo-relay $(RELEASE_DIR)/danmo-admin $(RELEASE_DIR)/danmo-user $(DIST_DIR)/bin/
+	cp $(RELEASE_DIR)/danmo-relay $(PKG_DIR)/danmo-relay/bin/
+	cp $(RELEASE_DIR)/danmo-admin $(PKG_DIR)/danmo-admin-portal/bin/
+	cp $(RELEASE_DIR)/danmo-user $(PKG_DIR)/danmo-user-portal/bin/
 	cp -R apps/admin/dist/. $(DIST_DIR)/apps/admin/
 	cp -R apps/user/dist/. $(DIST_DIR)/apps/user/
+	cp -R apps/admin/dist/. $(PKG_DIR)/danmo-admin-portal/apps/admin/
+	cp -R apps/user/dist/. $(PKG_DIR)/danmo-user-portal/apps/user/
 	cp .env.example $(DIST_DIR)/
-	@echo "Artifacts in $(DIST_DIR)/"
+	cp -R deploy/. $(DIST_DIR)/deploy/
+	cp deploy/packages/README.md $(PKG_DIR)/README.md
+	@echo "Artifacts in $(DIST_DIR)/ (full) and $(PKG_DIR)/ (relay | admin-portal | user-portal)"
 
 .PHONY: clean
 clean: ## Clean Rust + portal build outputs
