@@ -215,7 +215,7 @@ GCP：Cloud Run / GCE + Compose；Azure：Container Apps / VM + Compose。LB 探
 默认值按自用 / 小团队设置：同一账号并发 5 个请求以上即会收到 429。入口 429 带 `Retry-After: 1`，客户端可据此退避。调参建议：
 
 - **对外服务**：`RELAY_USER_CONCURRENCY` 按单用户最大并行会话设（Agent 类客户端常见 8–32）；`RELAY_USER_QPS` 不低于并发数，否则并发档位用不满。
-- **实例总量**：`RELAY_INSTANCE_CONCURRENCY` 受上游连接与内存约束，流式请求会长时间占位；`RELAY_INSTANCE_QPS` 主要受 SQLite 写入能力约束（每请求约 3–4 次短写事务）。
+- **实例总量**：`RELAY_INSTANCE_CONCURRENCY` 受上游连接与内存约束，流式请求会长时间占位；`RELAY_INSTANCE_QPS` 主要受 SQLite 写入能力约束（每请求 3 次短写：预扣、结算、调用日志）。
 - **旧式 Key**：`RELAY_LEGACY_*` 只限制「查库确认之前」的阶段，确认后改用账号额度；没有旧式 Key 时无需调整。
 
 ### 渠道健康（仅 relay 读取）

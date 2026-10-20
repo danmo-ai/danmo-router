@@ -510,3 +510,19 @@ async fn disabled_health_keeps_trying_failing_channel() {
     }
     assert_eq!(flaky_hits(&h).await, 3);
 }
+
+#[tokio::test]
+async fn exhausted_retries_keep_the_upstream_status() {
+    let h = Harness::new().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(529))
+        .mount(&h.mock)
+        .await;
+    h.channel(chat_channel("gpt-4o-mini")).await;
+
+    let (status, _, bytes) = h.call("/v1/chat/completions", &h.bearer(), CHAT).await;
+    assert_eq!(status, 529);
+    let v: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["error"]["message"], "upstream status 529");
+    assert_eq!(h.used_quota().await, 0);
+}
