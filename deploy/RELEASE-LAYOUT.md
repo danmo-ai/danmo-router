@@ -18,3 +18,10 @@ danmo-router-v0.3.1-x86_64-unknown-linux-gnu/
 ```
 
 另附 **`danmo-portals-<tag>.tar.gz`**（仅 `admin/` + `user/` 静态），与旧版兼容；**推荐用主包** 一次拿齐二进制与 Portal。
+
+首次发布 / 升级：
+
+```bash
+sudo ./deploy/scripts/install.sh --role=all --prefix=/opt/danmo
+sudo ./deploy/scripts/upgrade.sh --from-dir=. --prefix=/opt/danmo --role=all
+```

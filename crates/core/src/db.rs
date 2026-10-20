@@ -12,9 +12,15 @@ pub type DbPool = Pool<Sqlite>;
 
 pub async fn connect(config: &Config) -> AppResult<DbPool> {
     let url = &config.database_url;
+    if url.starts_with("mysql") {
+        return Err(AppError::BadRequest(
+            "MySQL support is in progress; use sqlite:// for now (see crates/core/migrations/mysql/)"
+                .into(),
+        ));
+    }
     if url.starts_with("postgres") {
         return Err(AppError::BadRequest(
-            "Postgres support is planned; use sqlite:// for now".into(),
+            "Postgres support is planned; use sqlite:// or await MySQL".into(),
         ));
     }
 
@@ -59,11 +65,12 @@ fn ensure_sqlite_parent_dir(url: &str) -> AppResult<()> {
     Ok(())
 }
 
-const MIGRATIONS: &[&str] = &[
-    include_str!("../migrations/001_init.sql"),
-    include_str!("../migrations/002_dialect.sql"),
-    include_str!("../migrations/003_channel_models.sql"),
-    include_str!("../migrations/004_redemptions.sql"),
+/// SQLite DDL only. MySQL counterparts live under `migrations/mysql/` (engine not wired yet).
+const SQLITE_MIGRATIONS: &[&str] = &[
+    include_str!("../migrations/sqlite/001_init.sql"),
+    include_str!("../migrations/sqlite/002_dialect.sql"),
+    include_str!("../migrations/sqlite/003_channel_models.sql"),
+    include_str!("../migrations/sqlite/004_redemptions.sql"),
 ];
 
 /// Runs each migration once, recorded in `schema_migrations`. Databases created before the
@@ -72,7 +79,7 @@ pub async fn migrate(pool: &DbPool) -> AppResult<()> {
     sqlx::query("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)")
         .execute(pool)
         .await?;
-    for (i, sql) in MIGRATIONS.iter().enumerate() {
+    for (i, sql) in SQLITE_MIGRATIONS.iter().enumerate() {
         let version = i as i64 + 1;
         let applied: Option<(i64,)> =
             sqlx::query_as("SELECT version FROM schema_migrations WHERE version = ?")
