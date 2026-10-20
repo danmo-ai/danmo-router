@@ -72,7 +72,7 @@ async fn register(
         &body.captcha_answer,
     )?;
     if state.captcha_replay.consume(&nonce) {
-        return Err(danmo_core::AppError::BadRequest("captcha expired or invalid".into()).into());
+        return Err(danmo_core::AppError::BadRequest("验证码无效或已过期".into()).into());
     }
 
     let user = user_svc::create_user(

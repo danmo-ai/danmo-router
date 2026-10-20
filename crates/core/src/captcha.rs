@@ -45,28 +45,28 @@ pub fn verify(encryption_key: &[u8; 32], token: &str, answer: &str) -> AppResult
     let token = token.trim();
     let answer = answer.trim();
     if token.is_empty() || answer.is_empty() {
-        return Err(AppError::BadRequest("captcha required".into()));
+        return Err(AppError::BadRequest("请填写验证码".into()));
     }
 
     let plaintext = decrypt_secret(encryption_key, token)
-        .map_err(|_| AppError::BadRequest("captcha expired or invalid".into()))?;
+        .map_err(|_| AppError::BadRequest("验证码无效或已过期".into()))?;
 
     let parts: Vec<&str> = plaintext.splitn(4, '|').collect();
     if parts.len() != 4 || parts[0] != "captcha-v1" {
-        return Err(AppError::BadRequest("captcha expired or invalid".into()));
+        return Err(AppError::BadRequest("验证码无效或已过期".into()));
     }
     let nonce = parts[1];
     let exp: i64 = parts[2]
         .parse()
-        .map_err(|_| AppError::BadRequest("captcha expired or invalid".into()))?;
+        .map_err(|_| AppError::BadRequest("验证码无效或已过期".into()))?;
     let code = parts[3];
 
     if chrono::Utc::now().timestamp() > exp {
-        return Err(AppError::BadRequest("captcha expired or invalid".into()));
+        return Err(AppError::BadRequest("验证码无效或已过期".into()));
     }
 
     if !constant_time_eq_ascii_ignore_case(answer.as_bytes(), code.as_bytes()) {
-        return Err(AppError::BadRequest("captcha incorrect".into()));
+        return Err(AppError::BadRequest("验证码错误".into()));
     }
 
     Ok(nonce.to_string())
