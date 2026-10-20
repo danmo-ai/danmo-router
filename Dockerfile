@@ -5,7 +5,7 @@
 #   docker build --target user  -t danmo-user .
 #   docker build --target edge  -t danmo-edge .
 
-ARG RUST_VERSION=1.83
+ARG RUST_VERSION=1.88
 ARG NODE_VERSION=22
 
 FROM rust:${RUST_VERSION}-bookworm AS rust-builder
