@@ -1,32 +1,20 @@
-# React + TypeScript + Vite
+# 用户中心
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Danmo Router 的用户 Portal。开发服务器默认 `http://localhost:5174`，把 `/api` 代理到用户 API（默认 `http://127.0.0.1:3002`，可用 `VITE_API_PROXY` 覆盖）。
 
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+cd apps/user
+npm ci
+npm run dev
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+在仓库根目录也可以 `make portals-dev-user`。页面可以注册，也可以用 `SEED_DEMO=1` 生成的 `demo` / `demo1234` 登录。
+
+登录后可查看账户概览（额度、兑换码充值）、管理 API 令牌、浏览可用模型与价格、分页查看自己的调用日志。Relay 基址来自 `PUBLIC_RELAY_URL`（未设置时显示本地默认）。截图见 [根 README](../../README.md#界面)。
+
+页面路由：`/` 账户，`/tokens` 令牌，`/models` 可用模型，`/logs` 调用日志。
+
+```bash
+npm run lint
+npm run build
+```
