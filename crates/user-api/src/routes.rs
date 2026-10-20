@@ -4,11 +4,14 @@ use crate::state::UserState;
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::IntoResponse;
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use axum_extra::extract::cookie::{Cookie, SameSite};
 use axum_extra::extract::CookieJar;
-use danmo_core::services::{log as log_svc, session, token as token_svc, user as user_svc};
+use danmo_core::models::User;
+use danmo_core::services::{
+    catalog, log as log_svc, redemption, session, token as token_svc, user as user_svc,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use time::Duration;
@@ -19,10 +22,17 @@ pub fn router(state: UserState) -> Router {
         .route("/api/user/login", post(login))
         .route("/api/user/logout", post(logout))
         .route("/api/user/me", get(me))
+        .route("/api/user/meta", get(meta))
         .route("/api/user/tokens", get(list_tokens).post(create_token))
         .route("/api/user/tokens/{id}/status", post(set_token_status))
-        .route("/api/user/tokens/{id}", axum::routing::delete(delete_token))
+        .route(
+            "/api/user/tokens/{id}",
+            put(update_token).delete(delete_token),
+        )
         .route("/api/user/logs", get(list_logs))
+        .route("/api/user/redeem", post(redeem))
+        .route("/api/user/password", post(change_password))
+        .route("/api/user/models", get(list_models))
         .with_state(state)
 }
 
@@ -82,20 +92,34 @@ async fn logout(State(state): State<UserState>, jar: CookieJar) -> ApiResult<imp
     Ok((StatusCode::OK, headers, Json(json!({ "success": true }))))
 }
 
+fn profile(user: &User) -> Value {
+    json!({
+        "id": user.id,
+        "username": user.username,
+        "role": user.role,
+        "quota": user.quota,
+        "used_quota": user.used_quota,
+        "remaining_quota": user.remaining_quota(),
+        "group_name": user.group_name,
+        "status": user.status,
+        "created_at": user.created_at
+    })
+}
+
 async fn me(AuthUser(user): AuthUser) -> ApiResult<Json<Value>> {
+    Ok(Json(json!({ "success": true, "data": profile(&user) })))
+}
+
+async fn meta(State(state): State<UserState>, _user: AuthUser) -> ApiResult<Json<Value>> {
+    let configured = state.config.public_relay_url.trim();
+    let relay_base_url = if configured.is_empty() {
+        "http://127.0.0.1:3000/v1".to_string()
+    } else {
+        configured.trim_end_matches('/').to_string()
+    };
     Ok(Json(json!({
         "success": true,
-        "data": {
-            "id": user.id,
-            "username": user.username,
-            "role": user.role,
-            "quota": user.quota,
-            "used_quota": user.used_quota,
-            "remaining_quota": user.remaining_quota(),
-            "group_name": user.group_name,
-            "status": user.status,
-            "created_at": user.created_at
-        }
+        "data": { "relay_base_url": relay_base_url }
     })))
 }
 
@@ -134,6 +158,7 @@ async fn create_token(
 ) -> ApiResult<Json<Value>> {
     let created = token_svc::create_token(
         &state.pool,
+        &state.config.encryption_key,
         user.id,
         &body.name,
         body.remain_quota,
@@ -167,6 +192,42 @@ async fn set_token_status(
     Ok(Json(json!({ "success": true, "data": token })))
 }
 
+#[derive(Deserialize)]
+struct UpdateTokenBody {
+    name: String,
+    #[serde(default = "default_remain")]
+    remain_quota: i64,
+    #[serde(default)]
+    unlimited_quota: bool,
+    expired_at: Option<String>,
+    #[serde(default)]
+    models: String,
+    group_name: Option<String>,
+}
+
+async fn update_token(
+    State(state): State<UserState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<i64>,
+    Json(body): Json<UpdateTokenBody>,
+) -> ApiResult<Json<Value>> {
+    let token = token_svc::update_token(
+        &state.pool,
+        id,
+        user.id,
+        token_svc::TokenUpdate {
+            name: body.name,
+            remain_quota: body.remain_quota,
+            unlimited_quota: body.unlimited_quota,
+            expired_at: body.expired_at,
+            models: body.models,
+            group_name: body.group_name,
+        },
+    )
+    .await?;
+    Ok(Json(json!({ "success": true, "data": token })))
+}
+
 async fn delete_token(
     State(state): State<UserState>,
     AuthUser(user): AuthUser,
@@ -182,6 +243,9 @@ struct LogQuery {
     limit: i64,
     #[serde(default)]
     offset: i64,
+    model: Option<String>,
+    status: Option<String>,
+    channel_id: Option<i64>,
 }
 
 fn default_limit() -> i64 {
@@ -193,8 +257,56 @@ async fn list_logs(
     AuthUser(user): AuthUser,
     Query(q): Query<LogQuery>,
 ) -> ApiResult<Json<Value>> {
-    let logs = log_svc::list_logs(&state.pool, Some(user.id), q.limit, q.offset).await?;
+    let logs = log_svc::list_logs(
+        &state.pool,
+        &log_svc::LogQuery {
+            user_id: Some(user.id),
+            model: q.model,
+            status: q.status,
+            channel_id: q.channel_id,
+            limit: q.limit,
+            offset: q.offset,
+        },
+    )
+    .await?;
     Ok(Json(json!({ "success": true, "data": logs })))
+}
+
+#[derive(Deserialize)]
+struct RedeemBody {
+    code: String,
+}
+
+async fn redeem(
+    State(state): State<UserState>,
+    AuthUser(user): AuthUser,
+    Json(body): Json<RedeemBody>,
+) -> ApiResult<Json<Value>> {
+    let updated = redemption::redeem(&state.pool, user.id, &body.code).await?;
+    Ok(Json(json!({ "success": true, "data": profile(&updated) })))
+}
+
+#[derive(Deserialize)]
+struct PasswordBody {
+    old_password: String,
+    password: String,
+}
+
+async fn change_password(
+    State(state): State<UserState>,
+    AuthUser(user): AuthUser,
+    Json(body): Json<PasswordBody>,
+) -> ApiResult<Json<Value>> {
+    user_svc::change_password(&state.pool, user.id, &body.old_password, &body.password).await?;
+    Ok(Json(json!({ "success": true })))
+}
+
+async fn list_models(
+    State(state): State<UserState>,
+    AuthUser(user): AuthUser,
+) -> ApiResult<Json<Value>> {
+    let catalog = catalog::list_for_group(&state.pool, &user.group_name).await?;
+    Ok(Json(json!({ "success": true, "data": catalog })))
 }
 
 fn with_session_cookie(

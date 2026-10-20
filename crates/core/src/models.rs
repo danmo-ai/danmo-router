@@ -231,6 +231,18 @@ pub struct Session {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct Redemption {
+    pub id: i64,
+    pub name: String,
+    pub code: String,
+    pub quota: i64,
+    pub status: String,
+    pub redeemed_by: Option<i64>,
+    pub redeemed_at: Option<String>,
+    pub created_at: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct OverviewStats {
     pub total_requests: i64,
@@ -238,4 +250,7 @@ pub struct OverviewStats {
     pub total_quota: i64,
     pub total_users: i64,
     pub total_channels: i64,
+    pub today_requests: i64,
+    pub failed_requests: i64,
+    pub today_quota: i64,
 }

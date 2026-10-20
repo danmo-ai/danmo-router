@@ -1,3 +1,4 @@
+use crate::admit::{Admitter, Limits};
 use crate::health::ChannelHealth;
 use danmo_core::{Config, DbPool};
 use reqwest::Client;
@@ -9,6 +10,7 @@ pub struct RelayState {
     pub config: Arc<Config>,
     pub http: Client,
     pub health: Arc<ChannelHealth>,
+    pub admit: Admitter,
 }
 
 impl RelayState {
@@ -18,11 +20,25 @@ impl RelayState {
             .build()
             .expect("http client");
         let health = Arc::new(ChannelHealth::new(config.health.clone()));
+        let admit = Admitter::new(Limits::from_config(&config));
         Self {
             pool,
             config,
             http,
             health,
+            admit,
         }
+    }
+
+    pub fn user_in_flight(&self, user_id: i64) -> u32 {
+        self.admit.user_in_flight(user_id)
+    }
+
+    pub fn instance_in_flight(&self) -> u32 {
+        self.admit.instance_in_flight()
+    }
+
+    pub fn legacy_in_flight(&self) -> u32 {
+        self.admit.legacy_in_flight()
     }
 }

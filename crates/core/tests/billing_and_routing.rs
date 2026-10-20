@@ -14,6 +14,7 @@ async fn setup() -> (danmo_core::DbPool, Arc<Config>, tempfile::TempDir) {
     let db_path = dir.path().join("test.db");
     let mut config = Config::from_env().unwrap();
     config.database_url = format!("sqlite://{}?mode=rwc", db_path.display());
+    config.seed_demo = false;
     config.admin_username = "admin".into();
     config.admin_password = "admin123".into();
     let pool = connect(&config).await.unwrap();
@@ -27,9 +28,19 @@ async fn token_auth_and_billing_settle_refund() {
     let user = user_svc::create_user(&pool, "alice", "secret1", "user", 10_000, "default")
         .await
         .unwrap();
-    let created = token_svc::create_token(&pool, user.id, "t1", -1, true, None, "", None)
-        .await
-        .unwrap();
+    let created = token_svc::create_token(
+        &pool,
+        &config.encryption_key,
+        user.id,
+        "t1",
+        -1,
+        true,
+        None,
+        "",
+        None,
+    )
+    .await
+    .unwrap();
 
     let auth = token_svc::authenticate_api_key(&pool, &created.raw_key)
         .await
@@ -121,13 +132,23 @@ async fn token_auth_and_billing_settle_refund() {
 
 #[tokio::test]
 async fn insufficient_quota_rejected() {
-    let (pool, _config, _dir) = setup().await;
+    let (pool, config, _dir) = setup().await;
     let user = user_svc::create_user(&pool, "bob", "secret1", "user", 1, "default")
         .await
         .unwrap();
-    let created = token_svc::create_token(&pool, user.id, "t1", -1, true, None, "", None)
-        .await
-        .unwrap();
+    let created = token_svc::create_token(
+        &pool,
+        &config.encryption_key,
+        user.id,
+        "t1",
+        -1,
+        true,
+        None,
+        "",
+        None,
+    )
+    .await
+    .unwrap();
     let auth = token_svc::authenticate_api_key(&pool, &created.raw_key)
         .await
         .unwrap();
@@ -422,6 +443,7 @@ async fn migration_003_moves_models_into_rows() {
 
     let mut config = Config::from_env().unwrap();
     config.database_url = url;
+    config.seed_demo = false;
     let pool = connect(&config).await.unwrap();
 
     let rows: Vec<(i64, String, String, String)> = sqlx::query_as(

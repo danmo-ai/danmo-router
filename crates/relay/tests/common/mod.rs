@@ -20,36 +20,64 @@ pub const USER_QUOTA: i64 = 10_000_000;
 pub struct Harness {
     pub pool: DbPool,
     pub config: Arc<Config>,
+    pub state: RelayState,
     pub mock: MockServer,
     pub key: String,
     pub user_id: i64,
-    /// Shared across calls so channel health carries over between requests.
-    state: RelayState,
     _dir: TempDir,
+}
+
+fn relax_limits(config: &mut Config) {
+    config.relay_user_concurrency = 1_000_000;
+    config.relay_instance_concurrency = 1_000_000;
+    config.relay_user_qps = 1_000_000;
+    config.relay_instance_qps = 1_000_000;
+    config.relay_legacy_concurrency = 1_000_000;
+    config.relay_legacy_qps = 1_000_000;
 }
 
 impl Harness {
     pub async fn new() -> Self {
-        Self::with_config(|_| {}).await
+        Self::build(relax_limits).await
     }
 
     pub async fn with_config(edit: impl FnOnce(&mut Config)) -> Self {
+        Self::build(|config| {
+            relax_limits(config);
+            edit(config);
+        })
+        .await
+    }
+
+    pub async fn build(tune: impl FnOnce(&mut Config)) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("relay.db");
         let mut config = Config::from_env().unwrap();
         config.database_url = format!("sqlite://{}?mode=rwc", db_path.display());
+        config.seed_demo = false;
         config.relay_max_retries = 2;
-        edit(&mut config);
+        tune(&mut config);
         let config = Arc::new(config);
         let pool = connect(&config).await.unwrap();
         let user = user_svc::create_user(&pool, "u1", "secret1", "user", USER_QUOTA, "default")
             .await
             .unwrap();
-        let created = token_svc::create_token(&pool, user.id, "tok", -1, true, None, "", None)
-            .await
-            .unwrap();
+        let created = token_svc::create_token(
+            &pool,
+            &config.encryption_key,
+            user.id,
+            "tok",
+            -1,
+            true,
+            None,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+        let state = RelayState::new(pool.clone(), config.clone());
         Self {
-            state: RelayState::new(pool.clone(), config.clone()),
+            state,
             pool,
             config,
             mock: MockServer::start().await,
@@ -105,9 +133,16 @@ impl Harness {
     /// Stream settlement runs after the body ends, so poll for the log row.
     pub async fn last_log(&self) -> LogEntry {
         for _ in 0..100 {
-            let logs = log_svc::list_logs(&self.pool, Some(self.user_id), 1, 0)
-                .await
-                .unwrap();
+            let logs = log_svc::list_logs(
+                &self.pool,
+                &log_svc::LogQuery {
+                    user_id: Some(self.user_id),
+                    limit: 1,
+                    ..log_svc::LogQuery::default()
+                },
+            )
+            .await
+            .unwrap();
             if let Some(l) = logs.into_iter().next() {
                 return l;
             }
