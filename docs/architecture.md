@@ -183,7 +183,7 @@ model_prices
   native_dialects   JSON，协议 → 方言
 ```
 
-渠道密钥以 `ENCRYPTION_KEY` 加密后存放。迁移记在 `schema_migrations`，每个只执行一次。`003_channel_models.sql` 把旧的逗号分隔模型列表和 `model_mapping` 拆成行，并把 `native_usage` 改成 `native_dialects`。
+渠道密钥以 `ENCRYPTION_KEY` 加密后存放。迁移按**数据库引擎**分目录（`crates/core/migrations/sqlite/`，即将支持 `mysql/`），记在 `schema_migrations`，每个版本只执行一次。`003_channel_models.sql` 把旧的逗号分隔模型列表和 `model_mapping` 拆成行，并把 `native_usage` 改成 `native_dialects`。规则见 [AGENTS.md](../AGENTS.md)。
 
 ## 用量与计费
 

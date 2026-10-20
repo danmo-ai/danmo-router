@@ -9,7 +9,8 @@
 | 系统设计（协议、方言、计费、渠道健康、`CB_*`/`RL_*`） | [architecture.md](architecture.md) |
 | 与同类项目对比 | [comparison.md](comparison.md) |
 | 合法授权、可接受使用与责任边界 | [compliance.md](compliance.md) |
-| Nginx / systemd 示例 | [deploy/README.md](../deploy/README.md)（`make package` → `dist/deploy/`） |
+| 首次发布 / 升级脚本、Nginx | [deploy/README.md](../deploy/README.md)（`install.sh` / `upgrade.sh`） |
+| Agent 与迁移规则 | [AGENTS.md](../AGENTS.md) |
 | 本地开发与 Makefile | [README.md](../README.md) |
 | 环境变量模板 | [`.env.example`](../.env.example) |
 
@@ -39,7 +40,7 @@ User UI  ──────► danmo-user
 - [ ] `SEED_DEMO=0`（生产禁止示例数据）
 - [ ] `ENCRYPTION_KEY` 为随机 64 位十六进制（32 字节），**所有进程一致**；勿使用 `.env.example` 默认值
 - [ ] `ADMIN_USERNAME` / `ADMIN_PASSWORD` 已修改；管理 API 仅内网或 VPN 可达
-- [ ] `DATABASE_URL` 指向持久化路径或计划中的 Postgres（当前代码仍仅支持 SQLite）
+- [ ] `DATABASE_URL` 指向持久化路径（当前 **sqlite://**；`mysql://` 即将支持，见 `migrations/mysql/`）
 - [ ] `CORS_ORIGINS` 为 Portal 真实域名（逗号分隔，勿误用 `*` 与凭证 Cookie 组合）
 - [ ] `PUBLIC_RELAY_URL` 设为用户中心展示的 API 根（含 `/v1`，如 `https://api.example.com/v1`）
 - [ ] 构建 Portal 时按需设置 `VITE_COMPLIANCE_URL`（默认链到仓库 [compliance.md](compliance.md)；自托管时指向你的合规页 URL）
@@ -74,8 +75,9 @@ make check   # fmt + clippy + test
 
 **TLS 建议：** `danmo-relay` 仅提供 **HTTP**（默认 `:3000`）。公网 HTTPS 由 **前置 Nginx** 终结证书，再反代到 `127.0.0.1:3000`（或本机 `:3000`）；大流量与流式场景不要在 relay 进程内做 TLS。
 
-- **交互安装：** Release 包内 `dist/deploy/scripts/setup-nginx.sh`（需 root）— 引导输入 API/admin/user 域名与 `/opt/danmo` 路径，渲染 Nginx 配置；**不**自动申请证书，证书未就绪时会提示 `certbot` 命令。
-- **手工模板：** [`deploy/examples/nginx/`](../deploy/examples/nginx/)，Certbot 说明见 [`deploy/examples/nginx/README.md`](../deploy/examples/nginx/README.md)。
+- **首次发布：** `dist/deploy/scripts/install.sh`（需 root）— `.env`、systemd、Nginx、启动；`--role=all|relay|admin|user`。证书未齐时提示 certbot，不静默申请。
+- **升级：** 解压新版本后在包内执行 `sudo ./deploy/scripts/upgrade.sh`（**`--from-dir` 默认为该解压根目录**）；安装目标读 **`/etc/danmo/install.conf`**。也可显式 `--from-dir=` / `--prefix=` / `--role=` / `--config=`。换二进制/Portal 后启动；**增量 SQL** 由进程 `migrate()` 执行（`migrations/sqlite/`，**MySQL 即将支持** `migrations/mysql/`）。
+- **手工 Nginx 模板：** [`deploy/examples/nginx/`](../deploy/examples/nginx/)。旧入口 `setup-nginx.sh` → `install.sh --nginx-only`。
 
 ```text
 Client ──TLS──► Nginx:443 ──HTTP──► danmo-relay:3000
@@ -280,7 +282,7 @@ GCP：**Network LB** TCP 443，HTTP 探活 3000 `/healthz`；Portal 用 Cloud CD
 |------|------|------|
 | `HOST` | `0.0.0.0` | 监听地址 |
 | `PORT` | 见上表 | 未设置时用各二进制默认端口 |
-| `DATABASE_URL` | `sqlite://data/danmo.db?mode=rwc` | 共享库；WAL 模式，多进程可读写的轻量场景 |
+| `DATABASE_URL` | `sqlite://data/danmo.db?mode=rwc` | 共享逻辑库；现仅 sqlite。`mysql://` 即将支持（迁移见 `migrations/mysql/`） |
 | `ENCRYPTION_KEY` | 开发用固定值 | 渠道 Key 加密与 API Key HMAC；**变更后已存渠道密文不可解密** |
 | `RUST_LOG` | `info` | `tracing` 过滤器，如 `info,danmo_relay=debug` |
 | `CORS_ORIGINS` | localhost Portal | 逗号分隔 Origin |
@@ -371,11 +373,25 @@ GET /healthz
 ## 升级与数据库迁移
 
 1. **备份数据库**（见下一节）。
-2. 滚动替换二进制：建议顺序 **admin/user → relay**，或先扩新 relay 再摘旧实例，避免长时间全站 relay 不可用。
-3. 任一进程启动时会执行迁移：版本记录在 `schema_migrations`，每条 SQL 迁移**只应用一次**。
-4. 观察日志是否出现新的 `applied migration N`；若启动失败，用备份回滚二进制与库文件。
+2. 推荐流程（任意目录下载解压即可）：
 
-**版本兼容：** 同一发行版内 admin、relay、user 应使用**相同 git/tag 构建**，避免 schema 与 API 不一致。
+```bash
+cd /tmp
+wget https://github.com/danmo-ai/danmo-router/releases/download/vX.Y.Z/danmo-router-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
+tar -xzf danmo-router-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
+cd danmo-router-vX.Y.Z-x86_64-unknown-linux-gnu
+sudo ./deploy/scripts/upgrade.sh
+# --from-dir 默认为当前解压根；安装目标读 /etc/danmo/install.conf
+```
+
+手工滚动时顺序建议 **admin/user → relay**。
+
+3. **不要**用脚本重跑全部 SQL。进程启动时对当前引擎目录（现 **sqlite**）只应用 `schema_migrations` 中尚未记录的版本；MySQL 接通后加载 `migrations/mysql/`。
+4. 观察日志 `applied migration N`；失败则回滚二进制与库文件。
+
+新增 schema：**必须**新增编号 SQL 文件（见 [AGENTS.md](../AGENTS.md) 与 [`crates/core/migrations/README.md`](../crates/core/migrations/README.md)），禁止改已发布的旧文件。
+
+**版本兼容：** 同一发行版内 admin、relay、user 应使用**相同 git/tag 构建**。
 
 ## 备份与恢复
 
@@ -435,12 +451,11 @@ cp /path/to/danmo.db /backup/danmo-$(date +%F).db
 
 ```bash
 make help
-make package          # 生产目录布局
-make run-relay        # 本地 relay :3000
-make run-admin        # 本地 admin :3001
-make run-user         # 本地 user :3002
-make portals-build    # 构建 Portal 静态文件
-make check            # 与 CI 相同检查
+make check            # fmt + clippy + test
+make package          # dist/ + packages/（二进制、Portal、deploy）
+make run-relay        # :3000
+make run-admin        # API :3001 + Portal :5173
+make run-user         # API :3002 + Portal :5174
 ```
 
 ---

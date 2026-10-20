@@ -4,6 +4,7 @@
 
 - 系统设计（协议、方言、计费、渠道健康）：[docs/architecture.md](docs/architecture.md)
 - **运维手册（自建/云平台部署、配置、升级、备份、排障）：[docs/operations.md](docs/operations.md)**
+- 贡献 / Agent 规则（迁移按引擎、install/upgrade）：[AGENTS.md](AGENTS.md)
 - 与 One API、New API、LiteLLM、GPT-Load、Sub2API 等的客观对比：[docs/comparison.md](docs/comparison.md)
 - **部署前必读** — 合法授权、禁止规避上游协议的中转/转售、责任边界：[docs/compliance.md](docs/compliance.md)
 
@@ -80,31 +81,25 @@ User UI  ──────► danmo-user  × 1..N
 ## Makefile
 
 ```bash
-make help           # 查看全部目标
-make test           # 测试
-make release        # 编译三个拆分二进制 + all-in-one
-make run-relay      # 启动转发 :3000
-make run-admin      # 启动管理 API :3001
-make run-user       # 启动用户 API :3002
-make portals-build  # 构建两个 Portal
-make package        # 产出 dist/bin + dist/apps
-make check          # fmt + clippy + test（对齐 CI）
+make help              # 全部目标
+make check             # fmt + clippy + test（对齐 CI）
+make release           # 编译二进制
+make package           # dist/ + dist/packages/（含 Portal 与 deploy）
+make run-relay         # 仅转发 :3000
+make run-admin         # 管理 API :3001 + Portal :5173
+make run-user          # 用户 API :3002 + Portal :5174
 ```
 
 ## 本地开发
 
 ```bash
 cp .env.example .env
+make portals-install   # 首次
 
-# 三个终端
+# 三个终端即可（admin/user 已带前端）
 make run-relay
-make run-admin
-make run-user
-
-# Portal
-make portals-install
-make portals-dev-admin   # http://localhost:5173 → :3001
-make portals-dev-user    # http://localhost:5174 → :3002
+make run-admin         # http://localhost:5173 → :3001
+make run-user          # http://localhost:5174 → :3002
 ```
 
 要在界面里看到渠道、用户和调用记录，把 `.env` 里的 `SEED_DEMO` 设为 `1` 后再启动。详见下一节。
@@ -133,13 +128,13 @@ make run-all-in-one
 
 ## 生产部署（拆分）
 
-步骤、Nginx 示例（`deploy/examples/`）、systemd、健康检查与升级备份见 **[docs/operations.md](docs/operations.md)**。简要：
+步骤、Nginx、`install.sh` / `upgrade.sh`、健康检查与升级备份见 **[docs/operations.md](docs/operations.md)** 与 **[deploy/README.md](deploy/README.md)**。简要：
 
-1. `make package` 或 GitHub Release 产物  
-2. 三组进程共用 `DATABASE_URL`、`ENCRYPTION_KEY`  
-3. `api.example.com` → relay（流式需 `proxy_buffering off`）；admin/user API 与 Portal 分域名  
-4. `CORS_ORIGINS`、`PUBLIC_RELAY_URL` 按真实域名配置  
-5. 构建 Portal 时可设 `VITE_COMPLIANCE_URL` 指向自托管的 [合规说明](docs/compliance.md)（默认链到 GitHub 文档）；页脚与登录页会展示链接  
+1. GitHub Release 主 tar（含二进制 + Portal + `deploy/`）或 `make package`  
+2. `sudo ./deploy/scripts/install.sh`（写入 `/etc/danmo/install.conf`）  
+3. 三组进程共用 `DATABASE_URL`、`ENCRYPTION_KEY`；`api` → relay（流式 `proxy_buffering off`）  
+4. `CORS_ORIGINS`、`PUBLIC_RELAY_URL` 按真实域名；可选 `VITE_COMPLIANCE_URL`  
+5. 升级：解压新版本后在包内 `sudo ./deploy/scripts/upgrade.sh`  
 
 ## CI / Release
 

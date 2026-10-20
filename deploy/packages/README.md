@@ -16,4 +16,11 @@
 
 共享配置：各包需同一份 `.env`（或相同 `DATABASE_URL` 与 `ENCRYPTION_KEY`）。从 `dist/.env.example` 复制。
 
-Nginx / systemd 示例在 **`dist/deploy/`**（或仓库 `deploy/`）。`setup-nginx.sh` 里安装根目录填对应路径，例如用户面 `DANMO_ROOT=/opt/danmo-user`。
+Nginx / systemd 与脚本在 **`dist/deploy/`**（或仓库 `deploy/`）：
+
+```bash
+sudo ./deploy/scripts/install.sh --role=user --prefix=/opt/danmo-user
+sudo ./deploy/scripts/upgrade.sh --from-dir=/path/to/new-release --role=user --prefix=/opt/danmo-user
+```
+
+`--role=admin` / `relay` / `all` 同理。共享 `.env` 中的 `DATABASE_URL`（sqlite 现用；mysql 即将支持）与 `ENCRYPTION_KEY`。

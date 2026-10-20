@@ -8,7 +8,7 @@ npm ci
 npm run dev
 ```
 
-在仓库根目录也可以 `make portals-dev-admin`。默认管理员是 `admin` / `admin123`（`ADMIN_USERNAME` / `ADMIN_PASSWORD`）。
+在仓库根目录用 `make run-admin` 可同时起管理 API 与本 Portal；仅前端则 `make portals-dev-admin`。默认管理员是 `admin` / `admin123`（`ADMIN_USERNAME` / `ADMIN_PASSWORD`）。
 
 `SEED_DEMO=1` 时各页会带上示例数据：概览、渠道、用户、模型价格、兑换码、调用日志（含筛选与分页）。截图见 [根 README](../../README.md#界面)。
 

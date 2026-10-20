@@ -1,6 +1,6 @@
-# 部署示例（Nginx + systemd）
+# 部署示例（首次发布 / 升级 / Nginx）
 
-`danmo-relay` / `danmo-admin` / `danmo-user` 监听 **HTTP**（默认 3000/3001/3002）。公网 **TLS 在 Nginx 终结**，再反代到本机 loopback。
+`danmo-relay` / `danmo-admin` / `danmo-user` 监听 **HTTP**（默认 3000/3001/3002）。公网 **TLS 在 Nginx 终结**。Schema 由进程启动时按引擎目录增量迁移（`crates/core/migrations/sqlite/`；**MySQL 即将支持** 见 `migrations/mysql/`）。
 
 **发布包布局：** GitHub Release 主 tar 与 `make package` 的 **`dist/`** 结构一致（见 [RELEASE-LAYOUT.md](RELEASE-LAYOUT.md)）。**`dist/packages/danmo-user-portal/`** = 用户 API + Portal；**`danmo-admin-portal/`** = 管理 API + Portal；**`danmo-relay/`** = 仅转发。
 
@@ -12,29 +12,56 @@ admin.example.com:443 ──► Nginx ──► 静态 Portal + /api ──► h
 user.example.com:443  ──► Nginx ──► 静态 Portal + /api ──► http://127.0.0.1:3002
 ```
 
-前面可有 **四层 LB（TCP:443）** 做流量分发；Nginx 跑在每台 relay/Portal 机器上。LB 健康检查可直连 **3000** 的 `GET /healthz`（不经 TLS）。
+三进程共用同一逻辑库（sqlite 现用；mysql 即将支持）。**不要**按角色拆三套库。
 
-## 安装步骤（单机示例）
+## 首次发布
 
-1. 安装二进制与静态资源（`make package` 产物）到 `/opt/danmo/`。
-2. 复制 [examples/systemd/danmo-relay.service](examples/systemd/danmo-relay.service) 等到 `/etc/systemd/system/`，`systemctl enable --now danmo-relay`。
-3. **Nginx 配置（二选一）**
-   - **交互脚本（推荐首次部署）：** `sudo ./scripts/setup-nginx.sh` — 引导输入域名、安装路径、本机要启用的 relay/admin/user 站点，渲染配置到 `/etc/nginx/conf.d/`。不捆绑 nginx/certbot；可选 apt 安装 nginx。
-   - **手工：** 复制 [examples/nginx/](examples/nginx/) 下配置，自行改 `server_name`、证书路径、`root`。
-4. 证书（二选一）：
-   - **Let’s Encrypt（Certbot）**：见 [examples/nginx/README.md](examples/nginx/README.md)。
-   - **云证书 / 自签**：把 `ssl_certificate` / `ssl_certificate_key` 指到 PEM 文件。
+```bash
+# 解压 Release 主 tar 后，在包内或拷到 /opt/danmo 后：
+sudo ./deploy/scripts/install.sh
+# 分包机示例：
+sudo ./deploy/scripts/install.sh --role=user --prefix=/opt/danmo-user
+sudo ./deploy/scripts/install.sh --role=relay --prefix=/opt/danmo-relay --skip-nginx   # 或按需
+```
+
+`install.sh`：安装二进制/Portal、`.env`、systemd、Nginx，并启动服务。SQL **不由脚本执行**，进程启动时 migrate。
+
+仅 Nginx：`sudo ./deploy/scripts/install.sh --nginx-only`  
+（旧名 `setup-nginx.sh` 已转发到该入口。）
+
+## 升级
+
+`install.sh` 会写入安装状态（**不是**猜目录）：
+
+| 文件 | 用途 |
+|------|------|
+| `${PREFIX}/danmo-install.conf` | 该安装根下的记录 |
+| `/etc/danmo/install.conf` | **upgrade 默认读取** |
+| `/etc/danmo/installs.d/<role>.conf` | 同机多角色时按 `--role=` 选用 |
+
+```bash
+cd /tmp
+wget https://github.com/danmo-ai/danmo-router/releases/download/vX.Y.Z/danmo-router-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
+tar -xzf danmo-router-vX.Y.Z-*.tar.gz
+cd danmo-router-vX.Y.Z-*
+sudo ./deploy/scripts/upgrade.sh
+# --from-dir 默认=本解压根；PREFIX/ROLE 读 /etc/danmo/install.conf
+
+# 同机多套或覆盖：
+sudo ./deploy/scripts/upgrade.sh --prefix=/opt/danmo-user --role=user
+```
+
+停服务 → 备份并替换二进制/Portal → 启动；**仅应用未登记的增量 SQL**（`schema_migrations`）。
 
 ## 文件说明
 
 | 文件 | 用途 |
 |------|------|
-| `examples/nginx/danmo-relay.conf` | 转发 API，流式友好 |
-| `examples/nginx/danmo-portal-admin.conf` | 管理 Portal + `/api` → admin |
-| `examples/nginx/danmo-portal-user.conf` | 用户 Portal + `/api` → user |
-| `examples/systemd/danmo-*.service` | systemd 单元模板 |
-| `scripts/setup-nginx.sh` | 交互式 Nginx 配置向导 |
+| `scripts/install.sh` | **首次发布** |
+| `scripts/upgrade.sh` | **升级** |
+| `scripts/setup-nginx.sh` | 兼容 → `install.sh --nginx-only` |
+| `examples/nginx/*` | Nginx 模板 |
+| `examples/systemd/*` | systemd 模板 |
+| `packages/README.md` | 按角色分包说明 |
 
-**说明：** 脚本适合 **单机/自管 VM**；云上若 Portal 走 OSS/CDN、API 走 NLB，通常只需在 relay 节点跑脚本中的 relay 部分，或继续手工改示例。
-
-详细说明见 [docs/operations.md](../docs/operations.md)。
+详细说明见 [docs/operations.md](../docs/operations.md) 与仓库根 [AGENTS.md](../AGENTS.md)。

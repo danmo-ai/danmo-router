@@ -424,8 +424,8 @@ async fn migration_003_moves_models_into_rows() {
         .await
         .unwrap();
     for sql in [
-        include_str!("../migrations/001_init.sql"),
-        include_str!("../migrations/002_dialect.sql"),
+        include_str!("../migrations/sqlite/001_init.sql"),
+        include_str!("../migrations/sqlite/002_dialect.sql"),
         r#"INSERT INTO channels (name, key_enc, base_url, models, model_mapping, upstream_protocol)
            VALUES ('chat', 'k', 'https://a', 'deepseek-chat, gpt-4o ,deepseek-chat,', '{"gpt-4o":"openai/gpt-4o"}', 'openai_chat');
            INSERT INTO channels (name, key_enc, base_url, models, model_mapping, upstream_protocol)
