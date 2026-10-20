@@ -20,4 +20,16 @@ pub enum AppError {
     Other(#[from] anyhow::Error),
 }
 
+impl AppError {
+    /// `SQLITE_BUSY` (5) or `SQLITE_LOCKED` (6), including extended codes such as 517.
+    pub fn is_db_busy(&self) -> bool {
+        let AppError::Db(sqlx::Error::Database(db)) = self else {
+            return false;
+        };
+        db.code()
+            .and_then(|c| c.parse::<i32>().ok())
+            .is_some_and(|c| matches!(c & 0xff, 5 | 6))
+    }
+}
+
 pub type AppResult<T> = Result<T, AppError>;

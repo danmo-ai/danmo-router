@@ -1,4 +1,4 @@
-use crate::db::DbPool;
+use crate::db::{self, DbPool};
 use crate::dialect::NativeDialects;
 use crate::error::{AppError, AppResult};
 use crate::models::{GroupRatio, ModelPrice, Token, User};
@@ -186,7 +186,7 @@ pub async fn pre_consume(
     let group_ratio = load_group_ratio(pool, group_name).await?;
     let amount = estimate_pre_consume(max_tokens, model_ratio, group_ratio);
 
-    let mut tx = pool.begin().await?;
+    let mut tx = db::begin_write(pool).await?;
 
     let fresh: User = sqlx::query_as("SELECT * FROM users WHERE id = ?")
         .bind(user.id)
@@ -248,7 +248,7 @@ pub async fn settle(pool: &DbPool, session: &BillingSession, usage: &Usage) -> A
     let actual = rule.quota(usage, group_ratio, now_utc_time());
     let delta = actual - session.pre_consumed;
 
-    let mut tx = pool.begin().await?;
+    let mut tx = db::begin_write(pool).await?;
     if delta != 0 {
         sqlx::query(
             "UPDATE users SET used_quota = used_quota + ?, updated_at = datetime('now') WHERE id = ?",
@@ -273,7 +273,7 @@ pub async fn settle(pool: &DbPool, session: &BillingSession, usage: &Usage) -> A
 }
 
 pub async fn refund(pool: &DbPool, session: &BillingSession) -> AppResult<()> {
-    let mut tx = pool.begin().await?;
+    let mut tx = db::begin_write(pool).await?;
     sqlx::query(
         "UPDATE users SET used_quota = used_quota - ?, updated_at = datetime('now') WHERE id = ?",
     )

@@ -133,8 +133,9 @@ async fn user_qps_rejects_the_next_call() {
         .call("/v1/chat/completions", &h.bearer(), body.clone())
         .await;
     assert_eq!(status, 200);
-    let (status, _, _) = h.call("/v1/chat/completions", &h.bearer(), body).await;
+    let (status, headers, _) = h.call("/v1/chat/completions", &h.bearer(), body).await;
     assert_eq!(status, 429);
+    assert_eq!(headers["retry-after"], "1");
     assert_eq!(h.upstream_requests().await.len(), 1);
     assert_eq!(h.state.user_in_flight(h.user_id), 0);
 }

@@ -1,4 +1,4 @@
-use crate::db::DbPool;
+use crate::db::{self, DbPool};
 use crate::error::{AppError, AppResult};
 use crate::models::{Redemption, User};
 use rand::rngs::OsRng;
@@ -19,7 +19,7 @@ pub async fn create_batch(
         ));
     }
     let name = name.trim();
-    let mut tx = pool.begin().await?;
+    let mut tx = db::begin_write(pool).await?;
     let mut created = Vec::with_capacity(count as usize);
     for _ in 0..count {
         let id = insert_one(&mut tx, name, quota).await?;
@@ -92,7 +92,7 @@ pub async fn redeem(pool: &DbPool, user_id: i64, code: &str) -> AppResult<User> 
     if code.is_empty() {
         return Err(AppError::BadRequest("code is required".into()));
     }
-    let mut tx = pool.begin().await?;
+    let mut tx = db::begin_write(pool).await?;
     let updated = sqlx::query(
         r#"
         UPDATE redemptions
