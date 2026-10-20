@@ -10,16 +10,13 @@ server {
 
     root /usr/share/nginx/html/admin;
     index index.html;
-    resolver 127.0.0.11 valid=10s ipv6=off;
-
-    location /assets/ {
+        location /assets/ {
         expires 30d;
         add_header Cache-Control "public, immutable";
     }
 
     location /api/ {
-        set $admin_upstream ${ADMIN_UPSTREAM};
-        proxy_pass http://$admin_upstream;
+        proxy_pass http://${ADMIN_UPSTREAM};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
