@@ -122,7 +122,7 @@ danmo-router 的差异化不在「渠道数量」，而在：
 
 **选型时几条硬差异：**
 
-1. **持久禁用 vs 临时踢出**：One API / New API 命中规则后常写 `auto_disabled`，全实例可见，恢复靠人工或定时测试。danmo-router 用**内存踢出 + 半开**（实现与运维见 [channel-health.md](channel-health.md)），避免多 relay 写库，但副本间状态短暂不一致。
+1. **持久禁用 vs 临时踢出**：One API / New API 命中规则后常写 `auto_disabled`，全实例可见，恢复靠人工或定时测试。danmo-router 用**内存踢出 + 半开**（见 [architecture.md — 渠道健康与选路](architecture.md#渠道健康与选路)），避免多 relay 写库，但副本间状态短暂不一致。
 2. **429**：New API 默认可重试且不易禁用，同档免费渠道易被反复抽到；LiteLLM 硬 cooldown；danmo-router **软降权**（AIMD 减半 + 线性恢复），必要时 `Retry-After` 硬踢出。
 3. **重试与优先级**：danmo 同请求内 exclude 已失败渠道，仍优先高优先级层；New API 重试若按 priority 下标降档，同档兜底弱，备用常放在更低 priority。
 
@@ -183,6 +183,6 @@ danmo-router **当前明显短板**（避免误判）：无内置支付；无 Re
 - GPT-Load：https://github.com/tbphp/gpt-load · https://www.gpt-load.com  
 - Sub2API：https://github.com/Wei-Shaw/sub2api（阅读其 ToS 警告）  
 - VoAPI：https://github.com/VoAPI/VoAPI  
-- 本项目架构：[architecture.md](architecture.md) · 渠道健康（relay）：[channel-health.md](channel-health.md)
+- 本项目：[architecture.md](architecture.md)（含渠道健康）· [operations.md](operations.md)（运维与云平台部署）
 
 第三方综述（有商业利益披露，结论需交叉验证）：[GPTZZZ 选型文](https://gptzzz.ai/blog/open-source-api-relay-selection/)、[Awesome AI Gateway 对比](https://cuihuan.github.io/awesome-ai-gateway/compare/one-api-vs-new-api-vs-litellm.zh-CN.md)、[GatewayScore: New API vs LiteLLM](https://gatewayscore.com/compare/new-api-vs-litellm/)。
