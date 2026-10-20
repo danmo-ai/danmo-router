@@ -2,13 +2,19 @@ use crate::config::Config;
 use crate::crypto;
 use crate::error::{AppError, AppResult};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx::{Pool, Sqlite};
+use sqlx::{Pool, Sqlite, Transaction};
 use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
 use tracing::info;
 
 pub type DbPool = Pool<Sqlite>;
+
+/// Takes the write lock up front. A deferred transaction that reads and then writes fails
+/// with `SQLITE_BUSY` / `SQLITE_BUSY_SNAPSHOT` at the upgrade without honoring `busy_timeout`.
+pub async fn begin_write(pool: &DbPool) -> AppResult<Transaction<'static, Sqlite>> {
+    Ok(pool.begin_with("BEGIN IMMEDIATE").await?)
+}
 
 pub async fn connect(config: &Config) -> AppResult<DbPool> {
     let url = &config.database_url;
@@ -89,7 +95,7 @@ pub async fn migrate(pool: &DbPool) -> AppResult<()> {
         if applied.is_some() {
             continue;
         }
-        let mut tx = pool.begin().await?;
+        let mut tx = begin_write(pool).await?;
         for statement in sql.split(';') {
             let stmt = statement.trim();
             if stmt.is_empty() {

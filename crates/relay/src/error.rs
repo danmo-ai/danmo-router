@@ -1,4 +1,5 @@
-use axum::http::StatusCode;
+use axum::http::header::RETRY_AFTER;
+use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use danmo_core::protocol::Protocol;
@@ -26,6 +27,11 @@ impl RelayError {
                 "insufficient_quota",
             ),
             AppError::Conflict(m) => (StatusCode::CONFLICT, m.clone(), "conflict"),
+            e @ AppError::Db(_) if e.is_db_busy() => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "database busy, retry shortly".into(),
+                "database_busy",
+            ),
             AppError::Db(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 e.to_string(),
@@ -37,8 +43,20 @@ impl RelayError {
 
     pub fn render(self, protocol: Protocol) -> Response {
         let (status, message, code) = self.parts();
-        protocol_error(protocol, status, &message, code)
+        let response = protocol_error(protocol, status, &message, code);
+        if status == StatusCode::SERVICE_UNAVAILABLE {
+            with_retry_after(response)
+        } else {
+            response
+        }
     }
+}
+
+fn with_retry_after(mut response: Response) -> Response {
+    response
+        .headers_mut()
+        .insert(RETRY_AFTER, HeaderValue::from_static("1"));
+    response
 }
 
 impl IntoResponse for RelayError {
@@ -85,12 +103,12 @@ pub fn protocol_error_body(
 }
 
 pub fn rate_limited(protocol: Protocol) -> Response {
-    protocol_error(
+    with_retry_after(protocol_error(
         protocol,
         StatusCode::TOO_MANY_REQUESTS,
         "rate limit exceeded",
         "rate_limit_error",
-    )
+    ))
 }
 
 pub fn protocol_error(

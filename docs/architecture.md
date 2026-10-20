@@ -82,7 +82,7 @@ User UI  ──────► danmo-user
 
 透传仍允许两处与方言无关的改写：把 `model` 换成行上的上游模型名；Chat 流在客户端未要求时补 `stream_options.include_usage`，并吞掉因此多出来的用量块。
 
-选路按分组、模型、优先级和权重。候选必须 `serves(入站协议)`，且 `opaque` 行在协议不同时被排除。每次重试前在进程内应用渠道健康（熔断、429 降权）；上游返回 429 或 5xx 时换下一个渠道，次数由 `RELAY_MAX_RETRIES` 限制。客户端断开后继续读完上游，以便拿到 usage。
+选路按分组、模型、优先级和权重。候选必须 `serves(入站协议)`，且 `opaque` 行在协议不同时被排除。每次重试前在进程内应用渠道健康（熔断、429 降权）；上游返回 429 或 5xx 时换下一个渠道，次数由 `RELAY_MAX_RETRIES` 限制。候选或次数用尽时，客户端收到最后一次上游的状态码（如 429、503、529）；最后一次失败是连接错误或本地转换失败时为 502。客户端断开后继续读完上游，以便拿到 usage。
 
 渠道健康（配置、状态机、环境变量）见下文 **[渠道健康与选路](#渠道健康与选路)**；与同类项目的选型对比见 **[comparison.md](comparison.md#渠道可用性与上游隔离)**。
 
@@ -187,7 +187,7 @@ model_prices
 
 ## 用量与计费
 
-用量按响应里实际出现的字段匹配适配器，匹配不到则计费失败：退回预扣额度，日志状态为 `billing_failed`。适配器有 `anthropic_messages`、`openai_responses`、`gemini`、`deepseek_chat`、`qianfan_chat`、`kimi_chat`、`embeddings`、`openai_chat`。
+用量按响应里实际出现的字段匹配适配器，匹配不到则计费失败：退回预扣额度，日志状态为 `billing_failed`，非流式请求向客户端返回 502（不交付未计费的内容）。上游以 200 返回方言内的错误体（如 MiniMax `base_resp`）时同样记 `billing_failed`，但客户端收到的是该上游错误信息（`upstream_error`）。适配器有 `anthropic_messages`、`openai_responses`、`gemini`、`deepseek_chat`、`qianfan_chat`、`kimi_chat`、`embeddings`、`openai_chat`。
 
 方言决定返回给客户端的形状：原厂方言已配置时，usage 渲染成该方言的字段集；未配置时透传路径保持上游原样。MiniMax 的 `base_resp` 非零状态码是软错误，只在 `minimax` 和 `opaque` 方言上检查。
 

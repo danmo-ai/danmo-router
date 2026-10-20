@@ -2,6 +2,9 @@ use danmo_core::config::Config;
 use danmo_core::db::connect;
 use danmo_core::services::{log as log_svc, redemption, user as user_svc};
 use danmo_core::AppError;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use std::str::FromStr;
+use std::time::Duration;
 
 async fn setup() -> (danmo_core::DbPool, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
@@ -101,4 +104,25 @@ async fn logs_filter_by_model_and_status() {
     .unwrap();
     assert_eq!(errors.len(), 1);
     assert_eq!(errors[0].model, "gpt-4o-mini");
+}
+
+#[tokio::test]
+async fn held_write_lock_reports_busy() {
+    let (pool, dir) = setup().await;
+    let _held = danmo_core::db::begin_write(&pool).await.unwrap();
+
+    let options = SqliteConnectOptions::from_str(&format!(
+        "sqlite://{}",
+        dir.path().join("test.db").display()
+    ))
+    .unwrap()
+    .busy_timeout(Duration::ZERO);
+    let other = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .unwrap();
+    let err = danmo_core::db::begin_write(&other).await.unwrap_err();
+    assert!(err.is_db_busy(), "{err}");
+    assert!(!AppError::Conflict("x".into()).is_db_busy());
 }

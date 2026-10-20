@@ -1,5 +1,5 @@
 use crate::crypto;
-use crate::db::DbPool;
+use crate::db::{self, DbPool};
 use crate::dialect;
 use crate::error::{AppError, AppResult};
 use crate::models::{Channel, ChannelModel};
@@ -159,7 +159,7 @@ pub async fn create_channel(
 ) -> AppResult<Channel> {
     let rows = input.validate()?;
     let key_enc = crypto::encrypt_secret(enc_key, &input.key).map_err(AppError::Other)?;
-    let mut tx = pool.begin().await?;
+    let mut tx = db::begin_write(pool).await?;
     let result = sqlx::query(
         r#"
         INSERT INTO channels
@@ -206,7 +206,7 @@ pub async fn update_channel(
         crypto::encrypt_secret(enc_key, &input.key).map_err(AppError::Other)?
     };
 
-    let mut tx = pool.begin().await?;
+    let mut tx = db::begin_write(pool).await?;
     sqlx::query(
         r#"
         UPDATE channels SET
@@ -258,7 +258,7 @@ pub async fn set_status(pool: &DbPool, id: i64, status: &str) -> AppResult<Chann
 }
 
 pub async fn delete_channel(pool: &DbPool, id: i64) -> AppResult<()> {
-    let mut tx = pool.begin().await?;
+    let mut tx = db::begin_write(pool).await?;
     for table in ["abilities", "channel_models"] {
         sqlx::query(&format!("DELETE FROM {table} WHERE channel_id = ?"))
             .bind(id)

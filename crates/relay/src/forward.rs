@@ -174,6 +174,7 @@ pub async fn handle(state: &RelayState, inbound: Inbound) -> RelayResult<Respons
     let max_retries = state.config.relay_max_retries.max(1);
     let mut exclude = Vec::new();
     let mut last_error = String::from("no channel available");
+    let mut last_status: Option<StatusCode> = None;
     let started = Instant::now();
 
     for _attempt in 0..max_retries {
@@ -188,7 +189,9 @@ pub async fn handle(state: &RelayState, inbound: Inbound) -> RelayResult<Respons
         {
             Ok(c) => c,
             Err(e) => {
-                last_error = e.to_string();
+                if exclude.is_empty() {
+                    last_error = e.to_string();
+                }
                 break;
             }
         };
@@ -204,6 +207,7 @@ pub async fn handle(state: &RelayState, inbound: Inbound) -> RelayResult<Respons
             Ok(k) => k,
             Err(e) => {
                 last_error = e.to_string();
+                last_status = None;
                 continue;
             }
         };
@@ -231,6 +235,7 @@ pub async fn handle(state: &RelayState, inbound: Inbound) -> RelayResult<Respons
                     Ok(v) => (Bytes::from(v.to_string()), false),
                     Err(e) => {
                         last_error = e;
+                        last_status = None;
                         continue;
                     }
                 }
@@ -256,6 +261,7 @@ pub async fn handle(state: &RelayState, inbound: Inbound) -> RelayResult<Respons
             Ok(r) => r,
             Err(e) => {
                 last_error = format!("upstream connect error: {e}");
+                last_status = None;
                 warn!(channel_id = ch.id, error = %last_error, "upstream failed");
                 state.health.record_failure(ch.id, &model, Instant::now());
                 continue;
@@ -273,6 +279,7 @@ pub async fn handle(state: &RelayState, inbound: Inbound) -> RelayResult<Respons
                 state.health.record_failure(ch.id, &model, Instant::now());
             }
             last_error = format!("upstream status {}", status.as_u16());
+            last_status = StatusCode::from_u16(status.as_u16()).ok();
             warn!(
                 channel_id = ch.id,
                 status = status.as_u16(),
@@ -325,7 +332,15 @@ pub async fn handle(state: &RelayState, inbound: Inbound) -> RelayResult<Respons
     )
     .await;
 
-    Err(AppError::Other(anyhow::anyhow!(last_error)).into())
+    match last_status {
+        Some(status) => Ok(protocol_error(
+            inbound.protocol,
+            status,
+            &last_error,
+            "upstream_error",
+        )),
+        None => Err(AppError::Other(anyhow::anyhow!(last_error)).into()),
+    }
 }
 
 impl Ctx {
@@ -450,29 +465,37 @@ async fn buffered_response(ctx: Ctx, response: reqwest::Response) -> RelayResult
     let bytes = bytes.map_err(|e| AppError::Other(e.into()))?;
 
     let parsed: Option<Value> = serde_json::from_slice(&bytes).ok();
-    let outcome = match &parsed {
-        None => Err(BillingFailure {
+    let soft_error = parsed
+        .as_ref()
+        .and_then(|v| ctx.upstream_dialect.soft_error(v));
+    let outcome = match (&parsed, &soft_error) {
+        (None, _) => Err(BillingFailure {
             reason: "upstream body is not JSON".into(),
             raw_usage: None,
         }),
-        Some(v) => match ctx.upstream_dialect.soft_error(v) {
-            Some(reason) => Err(BillingFailure {
-                reason,
-                raw_usage: None,
-            }),
-            None => usage_from_raw(collect::from_body(ctx.upstream, v), ctx.upstream),
-        },
+        (Some(_), Some(reason)) => Err(BillingFailure {
+            reason: reason.clone(),
+            raw_usage: None,
+        }),
+        (Some(v), None) => usage_from_raw(collect::from_body(ctx.upstream, v), ctx.upstream),
     };
 
     let (usage, _) = match &outcome {
         Ok(ok) => ok,
         Err(failure) => {
             finalize(&ctx, &outcome, None).await;
+            let (message, code) = match &soft_error {
+                Some(reason) => (reason.clone(), "upstream_error"),
+                None => (
+                    format!("billing failed: {}", failure.reason),
+                    "billing_failed",
+                ),
+            };
             return Ok(protocol_error(
                 ctx.inbound,
                 StatusCode::BAD_GATEWAY,
-                &format!("billing failed: {}", failure.reason),
-                "billing_failed",
+                &message,
+                code,
             ));
         }
     };

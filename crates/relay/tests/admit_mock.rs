@@ -133,8 +133,9 @@ async fn user_qps_rejects_the_next_call() {
         .call("/v1/chat/completions", &h.bearer(), body.clone())
         .await;
     assert_eq!(status, 200);
-    let (status, _, _) = h.call("/v1/chat/completions", &h.bearer(), body).await;
+    let (status, headers, _) = h.call("/v1/chat/completions", &h.bearer(), body).await;
     assert_eq!(status, 429);
+    assert_eq!(headers["retry-after"], "1");
     assert_eq!(h.upstream_requests().await.len(), 1);
     assert_eq!(h.state.user_in_flight(h.user_id), 0);
 }
@@ -245,4 +246,20 @@ async fn dropping_a_stream_releases_the_account_slot() {
     assert_eq!(h.state.user_in_flight(h.user_id), 1);
     drop(resp);
     assert_eq!(h.state.user_in_flight(h.user_id), 0);
+}
+
+#[tokio::test]
+async fn seeded_demo_key_is_admitted() {
+    let h = Harness::with_config(|config| config.seed_demo = true).await;
+    let app = danmo_relay::router(h.state.clone());
+    let req = axum::http::Request::builder()
+        .uri("/v1/models")
+        .header(
+            "authorization",
+            format!("Bearer {}", danmo_core::demo::DEMO_API_KEY),
+        )
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let resp = tower::ServiceExt::oneshot(app, req).await.unwrap();
+    assert_eq!(resp.status(), 200);
 }

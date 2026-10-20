@@ -123,7 +123,7 @@ make run-all-in-one
 | `alice` | `alice123` | 普通用户 |
 | `bob` | `bob12345` | 已禁用 |
 
-示例令牌 `sk-demo-playground` 属于 `demo`。渠道里的上游 Key 都是占位符（`sk-demo-…-not-a-real-key`），不能打到真实厂商。示例里包含 OpenAI、Anthropic、DeepSeek、可协议转换的 Qwen、Gemini，以及一条停用的聚合渠道；价格表带原厂方言、输入分档和时段系数；管理后台有若干未使用的兑换码；日志里有成功、计费失败和上游错误。
+示例令牌 `sk-de0100000000000000000000000000000000000000000000`（playground）属于 `demo`。旧版本种子里的 `sk-demo-playground` 不符合令牌格式、会被 relay 拒绝；已有演示库删除后重新以 `SEED_DEMO=1` 启动即可。渠道里的上游 Key 都是占位符（`sk-demo-…-not-a-real-key`），不能打到真实厂商。示例里包含 OpenAI、Anthropic、DeepSeek、可协议转换的 Qwen、Gemini，以及一条停用的聚合渠道；价格表带原厂方言、输入分档和时段系数；管理后台有若干未使用的兑换码；日志里有成功、计费失败和上游错误。
 
 生产环境保持 `SEED_DEMO=0`。
 
@@ -160,7 +160,7 @@ git tag v0.1.0 && git push origin v0.1.0
 
 ```bash
 curl http://127.0.0.1:3000/v1/chat/completions \
-  -H "Authorization: Bearer sk-demo-playground" \
+  -H "Authorization: Bearer sk-de0100000000000000000000000000000000000000000000" \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}]}'
 
@@ -170,4 +170,4 @@ curl http://127.0.0.1:3000/v1/messages \
   -d '{"model":"claude-sonnet-4-5","max_tokens":256,"messages":[{"role":"user","content":"hello"}]}'
 ```
 
-令牌在用户中心创建。请求能转发之前，要在管理后台把渠道的上游 Key 换成真实密钥。上面的 `sk-demo-playground` 只在 `SEED_DEMO=1` 的数据库里存在。
+令牌在用户中心创建。请求能转发之前，要在管理后台把渠道的上游 Key 换成真实密钥。上面的演示令牌只在 `SEED_DEMO=1` 的数据库里存在。
