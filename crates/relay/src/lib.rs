@@ -1,3 +1,4 @@
+mod admit;
 mod collect;
 mod convert;
 mod dialect;

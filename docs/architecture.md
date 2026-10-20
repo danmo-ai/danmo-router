@@ -135,6 +135,22 @@ model_prices
 
 价格页按协议选择原厂方言。建议先取 `vendor` 与模型家族一致的渠道上的行方言，没有再查内置前缀表（`deepseek-`、`qwen`、`kimi-`、`glm-`、`doubao-`、`MiniMax-`、`hunyuan-`、`ernie-`）。建议带来源，管理员确认后保存。`/api/admin/meta` 返回协议、转发模式、鉴权方式和方言列表。
 
+## 入口限额
+
+限额在单个 `danmo-relay` 进程的内存里，用来挡住死循环、重试风暴和伪造 key。没有跨实例共享计数，也没有按账号哈希分桶。一个账号在每个进程上各有一份额度。
+
+新令牌是 `sk-v1.{base64url(user_id 大端 8 字节与 16 字节随机数)}.{base64url(hmac_16)}`。MAC 密钥是 `HMAC-SHA256(ENCRYPTION_KEY, "danmo-api-key-v1")`，签的是那 24 字节载荷，截断到 16 字节。校验在读 body 和查库之前完成，比较 MAC 用常数时间。
+
+准入只看 `Authorization`、`x-api-key`、`x-goog-api-key` 和 Gemini 的 `?key=`：
+
+- HMAC 通过：占用该账号和本进程已验证流量的并发与 QPS。超限返回 429，不读 body，不查库。
+- 旧的 `sk-` 加 48 位十六进制：先占用本进程一小块未验证额度。查库确认账号后释放它，再占用该账号和本进程的已验证额度；账号已满则 429。
+- 没有 key、格式不对或 HMAC 失败：401，不占用任何额度。
+
+在途名额从准入一直持有到响应结束。流式响应把名额放在返回给客户端的 body 上，客户端断开或流结束就释放，上游那边可以继续读完以便计费。换渠道重试不另占名额。QPS 是令牌桶，容量等于每秒限额；并发没拿到时不扣 QPS。
+
+`group_name` 仍只负责选路和倍率。禁用、过期、模型白名单和额度仍在限额之后查库。环境变量都是本进程上限：`RELAY_USER_CONCURRENCY`、`RELAY_INSTANCE_CONCURRENCY`、`RELAY_USER_QPS`、`RELAY_INSTANCE_QPS`、`RELAY_LEGACY_CONCURRENCY`、`RELAY_LEGACY_QPS`。
+
 ## 边界
 
 - 入站方言来自模型配置。

@@ -8,6 +8,7 @@
 //! through the IR. Usage is always read from the raw upstream response and matched by field
 //! features; a response without billable usage is a billing failure.
 
+use crate::admit::{AdmitPermit, IntoAccountError};
 use crate::collect::{self, UsageCollector};
 use crate::convert::{self, StreamConverter};
 use crate::dialect::{self, DialectCodec};
@@ -39,6 +40,7 @@ pub struct Inbound {
     /// Gemini carries the model and the streaming flag in the path.
     pub path_model: Option<String>,
     pub path_stream: bool,
+    pub permit: AdmitPermit,
 }
 
 struct Parsed {
@@ -136,7 +138,16 @@ struct Ctx {
 }
 
 pub async fn handle(state: &RelayState, inbound: Inbound) -> RelayResult<Response> {
+    let permit = inbound.permit.clone();
     let auth = token_svc::authenticate_api_key(&state.pool, &inbound.api_key).await?;
+    if let Err(err) = permit.confirm_account(auth.user.id) {
+        return match err {
+            IntoAccountError::Limited => Ok(crate::error::rate_limited(inbound.protocol)),
+            IntoAccountError::Mismatch => {
+                Err(AppError::Unauthorized("invalid api key".into()).into())
+            }
+        };
+    }
     let parsed = parse_inbound(&inbound)?;
     let model = parsed.model.clone();
 
@@ -273,13 +284,18 @@ pub async fn handle(state: &RelayState, inbound: Inbound) -> RelayResult<Respons
         };
 
         if !status.is_success() {
-            return upstream_error(ctx, response).await;
+            let result = upstream_error(ctx, response).await;
+            drop(permit);
+            return result;
         }
         if parsed.stream {
-            return Ok(stream_response(ctx, response));
+            return Ok(stream_response(ctx, response, permit));
         }
-        return buffered_response(ctx, response).await;
+        let result = buffered_response(ctx, response).await;
+        drop(permit);
+        return result;
     }
+    drop(permit);
 
     let _ = billing::refund(&state.pool, &billing).await;
     let _ = log_svc::insert_log(
@@ -555,7 +571,7 @@ impl StreamMode {
     }
 }
 
-fn stream_response(ctx: Ctx, response: reqwest::Response) -> Response {
+fn stream_response(ctx: Ctx, response: reqwest::Response, permit: AdmitPermit) -> Response {
     let status = StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::OK);
     let (headers, mut mode) = match ctx.mode {
         RelayMode::Passthrough => (
@@ -637,17 +653,33 @@ fn stream_response(ctx: Ctx, response: reqwest::Response) -> Response {
         finalize(&ctx, &outcome, stream_error).await;
     });
 
-    let body = Body::from_stream(stream::unfold(rx, |mut rx| async move {
-        rx.recv().await.map(|item| (item, rx))
-    }));
+    // The permit stays with the body the client is reading. Dropping that body — the stream
+    // finished, or the client went away — releases the in-flight slot while billing may still
+    // be draining the upstream in the task above.
+    let body = Body::from_stream(stream::unfold(
+        (rx, permit),
+        |(mut rx, permit)| async move { rx.recv().await.map(|item| (item, (rx, permit))) },
+    ));
     let mut response = Response::new(body);
     *response.status_mut() = status;
     *response.headers_mut() = headers;
     response
 }
 
-pub async fn list_models(state: &RelayState, api_key: &str) -> RelayResult<Response> {
+pub async fn list_models(
+    state: &RelayState,
+    api_key: &str,
+    permit: AdmitPermit,
+) -> RelayResult<Response> {
     let auth = token_svc::authenticate_api_key(&state.pool, api_key).await?;
+    if let Err(err) = permit.confirm_account(auth.user.id) {
+        return match err {
+            IntoAccountError::Limited => Ok(crate::error::rate_limited(Protocol::OpenaiChat)),
+            IntoAccountError::Mismatch => {
+                Err(AppError::Unauthorized("invalid api key".into()).into())
+            }
+        };
+    }
     let group = token_svc::resolve_group(&auth.token, &auth.user);
     let models = channel::list_available_models(&state.pool, &group).await?;
     let data: Vec<Value> = models
@@ -661,6 +693,7 @@ pub async fn list_models(state: &RelayState, api_key: &str) -> RelayResult<Respo
             })
         })
         .collect();
+    drop(permit);
 
     Ok(axum::Json(json!({
         "object": "list",

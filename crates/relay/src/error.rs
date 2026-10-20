@@ -84,6 +84,15 @@ pub fn protocol_error_body(
     }
 }
 
+pub fn rate_limited(protocol: Protocol) -> Response {
+    protocol_error(
+        protocol,
+        StatusCode::TOO_MANY_REQUESTS,
+        "rate limit exceeded",
+        "rate_limit_error",
+    )
+}
+
 pub fn protocol_error(
     protocol: Protocol,
     status: StatusCode,

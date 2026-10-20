@@ -19,6 +19,7 @@ pub struct AuthenticatedToken {
 #[allow(clippy::too_many_arguments)]
 pub async fn create_token(
     pool: &DbPool,
+    encryption_key: &[u8; 32],
     user_id: i64,
     name: &str,
     remain_quota: i64,
@@ -27,7 +28,7 @@ pub async fn create_token(
     models: &str,
     group_name: Option<&str>,
 ) -> AppResult<CreatedToken> {
-    let raw_key = crypto::generate_api_key();
+    let raw_key = crypto::generate_api_key(encryption_key, user_id);
     let key_hash = crypto::hash_token_key(&raw_key);
     let key_prefix = raw_key.chars().take(10).collect::<String>();
     let expired_at = normalize_optional_expiry(expired_at)?;
