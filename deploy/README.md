@@ -1,6 +1,6 @@
 # 部署（Docker Compose / 云 Serverless 容器）
 
-`danmo-relay` / `danmo-admin` / `danmo-user` 监听 HTTP（默认 3000/3001/3002）。公网入口是 **Compose 内置的 `danmo-edge`（Nginx）**；Portal 静态资源打进 edge 镜像，**不走 OSS/CDN**。后端容器**不映射宿主机端口**，仅 edge 暴露 80/443。
+`danmo-relay` / `danmo-admin` / `danmo-user` 监听 HTTP（默认 3000/3001/3002）。公网入口是 **Compose 内置的 `danmo-edge`（Nginx）**；Portal 静态资源打进 edge 镜像，**不走 OSS/CDN**。Compose 下后端使用 `network_mode: service:edge`，与 Nginx **共享网络命名空间**，仅经 `127.0.0.1` 反代；**宿主机只映射 edge 的 80/443**。
 
 Schema 由进程启动时按引擎目录增量迁移（`crates/core/migrations/sqlite/`；MySQL 即将支持）。
 

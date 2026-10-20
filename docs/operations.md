@@ -87,7 +87,7 @@ Client ──► [可选四层 LB] ──► edge:80/443 ──HTTP──► rel
 | `admin.example.com` | 静态 admin + `/api` → `admin:3001` | 与 Portal 同域 Cookie |
 | `user.example.com` | 静态 user + `/api` → `user:3002` | |
 
-**仅 edge 映射宿主机端口**；勿将 3000/3001/3002 暴露到公网。
+**仅 edge 映射宿主机端口**；Compose 中 API 容器与 edge 共享网络命名空间（`127.0.0.1:300x`），勿再单独发布 3000/3001/3002。云 Serverless 分任务部署时改用平台内网 DNS，并设置 `RELAY_UPSTREAM` / `ADMIN_UPSTREAM` / `USER_UPSTREAM`。
 
 ## 云厂商平台部署
 
