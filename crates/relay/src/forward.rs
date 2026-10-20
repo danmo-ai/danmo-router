@@ -465,29 +465,37 @@ async fn buffered_response(ctx: Ctx, response: reqwest::Response) -> RelayResult
     let bytes = bytes.map_err(|e| AppError::Other(e.into()))?;
 
     let parsed: Option<Value> = serde_json::from_slice(&bytes).ok();
-    let outcome = match &parsed {
-        None => Err(BillingFailure {
+    let soft_error = parsed
+        .as_ref()
+        .and_then(|v| ctx.upstream_dialect.soft_error(v));
+    let outcome = match (&parsed, &soft_error) {
+        (None, _) => Err(BillingFailure {
             reason: "upstream body is not JSON".into(),
             raw_usage: None,
         }),
-        Some(v) => match ctx.upstream_dialect.soft_error(v) {
-            Some(reason) => Err(BillingFailure {
-                reason,
-                raw_usage: None,
-            }),
-            None => usage_from_raw(collect::from_body(ctx.upstream, v), ctx.upstream),
-        },
+        (Some(_), Some(reason)) => Err(BillingFailure {
+            reason: reason.clone(),
+            raw_usage: None,
+        }),
+        (Some(v), None) => usage_from_raw(collect::from_body(ctx.upstream, v), ctx.upstream),
     };
 
     let (usage, _) = match &outcome {
         Ok(ok) => ok,
         Err(failure) => {
             finalize(&ctx, &outcome, None).await;
+            let (message, code) = match &soft_error {
+                Some(reason) => (reason.clone(), "upstream_error"),
+                None => (
+                    format!("billing failed: {}", failure.reason),
+                    "billing_failed",
+                ),
+            };
             return Ok(protocol_error(
                 ctx.inbound,
                 StatusCode::BAD_GATEWAY,
-                &format!("billing failed: {}", failure.reason),
-                "billing_failed",
+                &message,
+                code,
             ));
         }
     };

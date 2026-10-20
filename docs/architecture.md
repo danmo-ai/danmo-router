@@ -187,7 +187,7 @@ model_prices
 
 ## 用量与计费
 
-用量按响应里实际出现的字段匹配适配器，匹配不到则计费失败：退回预扣额度，日志状态为 `billing_failed`。适配器有 `anthropic_messages`、`openai_responses`、`gemini`、`deepseek_chat`、`qianfan_chat`、`kimi_chat`、`embeddings`、`openai_chat`。
+用量按响应里实际出现的字段匹配适配器，匹配不到则计费失败：退回预扣额度，日志状态为 `billing_failed`，非流式请求向客户端返回 502（不交付未计费的内容）。上游以 200 返回方言内的错误体（如 MiniMax `base_resp`）时同样记 `billing_failed`，但客户端收到的是该上游错误信息（`upstream_error`）。适配器有 `anthropic_messages`、`openai_responses`、`gemini`、`deepseek_chat`、`qianfan_chat`、`kimi_chat`、`embeddings`、`openai_chat`。
 
 方言决定返回给客户端的形状：原厂方言已配置时，usage 渲染成该方言的字段集；未配置时透传路径保持上游原样。MiniMax 的 `base_resp` 非零状态码是软错误，只在 `minimax` 和 `opaque` 方言上检查。
 
