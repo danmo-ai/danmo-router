@@ -1,21 +1,16 @@
-# 管理 Portal — 静态 SPA + 同源 /api → danmo-admin:3001
-
-upstream danmo_admin_api {
-    server 127.0.0.1:3001;
-    keepalive 8;
-}
-
 server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
-    server_name admin.example.com;
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name ${USER_DOMAIN};
 
-    ssl_certificate     /etc/letsencrypt/live/admin.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/admin.example.com/privkey.pem;
+    ssl_certificate     ${SSL_CERT};
+    ssl_certificate_key ${SSL_KEY};
     ssl_protocols TLSv1.2 TLSv1.3;
 
-    root /opt/danmo/apps/admin;
+    root /usr/share/nginx/html/user;
     index index.html;
+    resolver 127.0.0.11 valid=10s ipv6=off;
 
     location /assets/ {
         expires 30d;
@@ -23,7 +18,8 @@ server {
     }
 
     location /api/ {
-        proxy_pass http://danmo_admin_api;
+        set $user_upstream ${USER_UPSTREAM};
+        proxy_pass http://$user_upstream;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -40,7 +36,7 @@ server {
 server {
     listen 80;
     listen [::]:80;
-    server_name admin.example.com;
+    server_name ${USER_DOMAIN};
 
     location /.well-known/acme-challenge/ {
         root /var/www/certbot;

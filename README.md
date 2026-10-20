@@ -4,7 +4,7 @@
 
 - 系统设计（协议、方言、计费、渠道健康）：[docs/architecture.md](docs/architecture.md)
 - **运维手册（自建/云平台部署、配置、升级、备份、排障）：[docs/operations.md](docs/operations.md)**
-- 贡献 / Agent 规则（迁移按引擎、install/upgrade）：[AGENTS.md](AGENTS.md)
+- 贡献 / Agent 规则（迁移按引擎、Compose 部署）：[AGENTS.md](AGENTS.md)
 - 与 One API、New API、LiteLLM、GPT-Load、Sub2API 等的客观对比：[docs/comparison.md](docs/comparison.md)
 - **部署前必读** — 合法授权、禁止规避上游协议的中转/转售、责任边界：[docs/compliance.md](docs/compliance.md)
 
@@ -83,11 +83,12 @@ User UI  ──────► danmo-user  × 1..N
 ```bash
 make help              # 全部目标
 make check             # fmt + clippy + test（对齐 CI）
-make release           # 编译二进制
-make package           # dist/ + dist/packages/（含 Portal 与 deploy）
-make run-relay         # 仅转发 :3000
-make run-admin         # 管理 API :3001 + Portal :5173
-make run-user          # 用户 API :3002 + Portal :5174
+make release           # 本地 cargo release 二进制（开发用）
+make docker-build      # 构建 GHCR 同款四镜像
+make compose-up        # 整栈 Compose（edge 暴露 80/443）
+make run-relay         # 开发：仅转发 :3000
+make run-admin         # 开发：管理 API :3001 + Portal :5173
+make run-user          # 开发：用户 API :3002 + Portal :5174
 ```
 
 ## 本地开发
@@ -128,18 +129,20 @@ make run-all-in-one
 
 ## 生产部署（拆分）
 
-步骤、Nginx、`install.sh` / `upgrade.sh`、健康检查与升级备份见 **[docs/operations.md](docs/operations.md)** 与 **[deploy/README.md](deploy/README.md)**。简要：
+步骤、Compose edge Nginx、`install.sh` / `upgrade.sh`、健康检查与升级备份见 **[docs/operations.md](docs/operations.md)** 与 **[deploy/README.md](deploy/README.md)**。简要：
 
-1. GitHub Release 主 tar（含二进制 + Portal + `deploy/`）或 `make package`  
-2. `sudo ./deploy/scripts/install.sh`（写入 `/etc/danmo/install.conf`）  
-3. 三组进程共用 `DATABASE_URL`、`ENCRYPTION_KEY`；`api` → relay（流式 `proxy_buffering off`）  
-4. `CORS_ORIGINS`、`PUBLIC_RELAY_URL` 按真实域名；可选 `VITE_COMPLIANCE_URL`  
-5. 升级：解压新版本后在包内 `sudo ./deploy/scripts/upgrade.sh`  
+1. `cp .env.example .env`，设置 `ENCRYPTION_KEY` 与域名；生产 `SEED_DEMO=0`  
+2. `./deploy/scripts/install.sh` 或 `make compose-up`（仅 **edge** 暴露 80/443）  
+3. 三组 API 共用 `DATABASE_URL`、`ENCRYPTION_KEY`；Portal 由 `danmo-edge` 同域托管（不走 OSS/CDN）  
+4. `CORS_ORIGINS`、`PUBLIC_RELAY_URL` 按真实域名；可选构建参数 `VITE_COMPLIANCE_URL`  
+5. 升级：`./deploy/scripts/upgrade.sh`（pull GHCR）或 `--build`  
+
+开发迭代仍用下方 `make run-*`；整栈冒烟用 Compose。
 
 ## CI / Release
 
 - [`.github/workflows/ci.yml`](.github/workflows/ci.yml)：push/PR → fmt、clippy、test、release build、Portal build  
-- [`.github/workflows/release.yml`](.github/workflows/release.yml)：推送 `v*` tag → 多平台二进制 + Portal 资产发布到 GitHub Release  
+- [`.github/workflows/release.yml`](.github/workflows/release.yml)：推送 `v*` tag → **GHCR** 四镜像（`danmo-relay` / `admin` / `user` / `edge`）  
 
 ```bash
 git tag v0.1.0 && git push origin v0.1.0

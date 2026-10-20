@@ -7,178 +7,151 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 env:
-  CARGO_TERM_COLOR: always
+  REGISTRY: ghcr.io
+  IMAGE_OWNER: ${{ github.repository_owner }}
 
 jobs:
-  build:
-    name: Build ${{ matrix.target }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            archive: tar.gz
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            archive: tar.gz
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            archive: tar.gz
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: .
-          key: ${{ matrix.target }}
-
-      - name: Build release binaries
-        run: |
-          cargo build -p danmo-server \
-            --bin danmo-relay \
-            --bin danmo-admin \
-            --bin danmo-user \
-            --release \
-            --target ${{ matrix.target }}
-
-      - name: Stage binaries
-        run: |
-          STAGE=danmo-router-${{ github.ref_name }}-${{ matrix.target }}
-          mkdir -p "$STAGE"
-          cp target/${{ matrix.target }}/release/danmo-relay \
-             target/${{ matrix.target }}/release/danmo-admin \
-             target/${{ matrix.target }}/release/danmo-user \
-             .env.example \
-             "$STAGE/"
-          tar -czf "$STAGE.tar.gz" "$STAGE"
-          echo "ASSET=$STAGE.tar.gz" >> "$GITHUB_ENV"
-
-      - name: Upload binaries artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: binaries-${{ matrix.target }}
-          path: ${{ env.ASSET }}
-
-  portals:
-    name: Build portals
+  ghcr:
+    name: Build and push GHCR images
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
         with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: |
-            apps/admin/package-lock.json
-            apps/user/package-lock.json
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build admin & user
-        run: |
-          (cd apps/admin && npm ci && npm run build)
-          (cd apps/user && npm ci && npm run build)
-          STAGE=danmo-portals-${{ github.ref_name }}
-          mkdir -p "$STAGE/admin" "$STAGE/user"
-          cp -R apps/admin/dist/. "$STAGE/admin/"
-          cp -R apps/user/dist/. "$STAGE/user/"
-          tar -czf "$STAGE.tar.gz" "$STAGE"
-          echo "ASSET=$STAGE.tar.gz" >> "$GITHUB_ENV"
-
-      - uses: actions/upload-artifact@v4
+      - name: Docker metadata (relay)
+        id: meta-relay
+        uses: docker/metadata-action@v5
         with:
-          name: release-portals
-          path: ${{ env.ASSET }}
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/danmo-relay
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{raw}}
+            type=raw,value=latest
 
-  bundle:
-    name: Bundle ${{ matrix.target }}
-    needs: [build, portals]
+      - name: Docker metadata (admin)
+        id: meta-admin
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/danmo-admin
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{raw}}
+            type=raw,value=latest
+
+      - name: Docker metadata (user)
+        id: meta-user
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/danmo-user
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{raw}}
+            type=raw,value=latest
+
+      - name: Docker metadata (edge)
+        id: meta-edge
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/danmo-edge
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{raw}}
+            type=raw,value=latest
+
+      - name: Build and push danmo-relay
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          target: relay
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta-relay.outputs.tags }}
+          labels: ${{ steps.meta-relay.outputs.labels }}
+          cache-from: type=gha,scope=danmo-rust
+          cache-to: type=gha,mode=max,scope=danmo-rust
+
+      - name: Build and push danmo-admin
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          target: admin
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta-admin.outputs.tags }}
+          labels: ${{ steps.meta-admin.outputs.labels }}
+          cache-from: type=gha,scope=danmo-rust
+          cache-to: type=gha,mode=max,scope=danmo-rust
+
+      - name: Build and push danmo-user
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          target: user
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta-user.outputs.tags }}
+          labels: ${{ steps.meta-user.outputs.labels }}
+          cache-from: type=gha,scope=danmo-rust
+          cache-to: type=gha,mode=max,scope=danmo-rust
+
+      - name: Build and push danmo-edge
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          target: edge
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta-edge.outputs.tags }}
+          labels: ${{ steps.meta-edge.outputs.labels }}
+          cache-from: type=gha,scope=danmo-edge
+          cache-to: type=gha,mode=max,scope=danmo-edge
+
+  release-notes:
+    name: GitHub Release notes
+    needs: [ghcr]
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target:
-          - x86_64-unknown-linux-gnu
-          - aarch64-apple-darwin
-          - x86_64-apple-darwin
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: binaries-${{ matrix.target }}
-          path: artifacts/bin
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: release-portals
-          path: artifacts/portals
-
-      - name: Assemble full release tarball
-        env:
-          TAG: ${{ github.ref_name }}
-          TARGET: ${{ matrix.target }}
-        run: |
-          set -euo pipefail
-          BIN_TAR="artifacts/bin/danmo-router-${TAG}-${TARGET}.tar.gz"
-          PORTAL_TAR="artifacts/portals/danmo-portals-${TAG}.tar.gz"
-          test -f "$BIN_TAR"
-          test -f "$PORTAL_TAR"
-
-          STAGE="danmo-router-${TAG}-${TARGET}"
-          rm -rf _work && mkdir -p "_work/${STAGE}/apps/admin" "_work/${STAGE}/apps/user"
-          tar -xzf "$BIN_TAR" -C _work
-          tar -xzf "$PORTAL_TAR" -C _work
-
-          ROOT="_work/${STAGE}"
-          cp -R "_work/danmo-portals-${TAG}/admin/." "${ROOT}/apps/admin/"
-          cp -R "_work/danmo-portals-${TAG}/user/." "${ROOT}/apps/user/"
-          cp -R deploy/. "${ROOT}/deploy/"
-          cp deploy/RELEASE-LAYOUT.md "${ROOT}/RELEASE-LAYOUT.md"
-
-          PKG="${ROOT}/packages"
-          mkdir -p \
-            "${PKG}/danmo-relay/bin" \
-            "${PKG}/danmo-admin-portal/bin" "${PKG}/danmo-admin-portal/apps/admin" \
-            "${PKG}/danmo-user-portal/bin" "${PKG}/danmo-user-portal/apps/user"
-          cp "${ROOT}/danmo-relay" "${PKG}/danmo-relay/bin/"
-          cp "${ROOT}/danmo-admin" "${PKG}/danmo-admin-portal/bin/"
-          cp "${ROOT}/danmo-user" "${PKG}/danmo-user-portal/bin/"
-          cp -R "${ROOT}/apps/admin/." "${PKG}/danmo-admin-portal/apps/admin/"
-          cp -R "${ROOT}/apps/user/." "${PKG}/danmo-user-portal/apps/user/"
-          cp deploy/packages/README.md "${PKG}/README.md"
-
-          tar -czf "${STAGE}.tar.gz" -C _work "${STAGE}"
-          echo "ASSET=${STAGE}.tar.gz" >> "$GITHUB_ENV"
-
-      - name: Upload release asset
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-bundle-${{ matrix.target }}
-          path: ${{ env.ASSET }}
-
-  publish:
-    name: GitHub Release
-    needs: [bundle, portals]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          pattern: release-*
-          merge-multiple: true
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: artifacts/**
+          body: |
+            ## Container images (GHCR)
+
+            | Image | Pull |
+            |-------|------|
+            | relay | `docker pull ghcr.io/${{ github.repository_owner }}/danmo-relay:${{ github.ref_name }}` |
+            | admin | `docker pull ghcr.io/${{ github.repository_owner }}/danmo-admin:${{ github.ref_name }}` |
+            | user | `docker pull ghcr.io/${{ github.repository_owner }}/danmo-user:${{ github.ref_name }}` |
+            | edge | `docker pull ghcr.io/${{ github.repository_owner }}/danmo-edge:${{ github.ref_name }}` |
+
+            Deploy with Compose from the repository:
+
+            ```bash
+            export DANMO_TAG=${{ github.ref_name }}
+            cp .env.example .env   # set ENCRYPTION_KEY and domains
+            ./deploy/scripts/install.sh --pull --no-build
+            ```
+
+            See [deploy/README.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/deploy/README.md).

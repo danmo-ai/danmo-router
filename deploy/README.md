@@ -1,67 +1,77 @@
-# 部署示例（首次发布 / 升级 / Nginx）
+# 部署（Docker Compose / 云 Serverless 容器）
 
-`danmo-relay` / `danmo-admin` / `danmo-user` 监听 **HTTP**（默认 3000/3001/3002）。公网 **TLS 在 Nginx 终结**。Schema 由进程启动时按引擎目录增量迁移（`crates/core/migrations/sqlite/`；**MySQL 即将支持** 见 `migrations/mysql/`）。
+`danmo-relay` / `danmo-admin` / `danmo-user` 监听 HTTP（默认 3000/3001/3002）。公网入口是 **Compose 内置的 `danmo-edge`（Nginx）**；Portal 静态资源打进 edge 镜像，**不走 OSS/CDN**。后端容器**不映射宿主机端口**，仅 edge 暴露 80/443。
 
-**发布包布局：** GitHub Release 主 tar 与 `make package` 的 **`dist/`** 结构一致（见 [RELEASE-LAYOUT.md](RELEASE-LAYOUT.md)）。**`dist/packages/danmo-user-portal/`** = 用户 API + Portal；**`danmo-admin-portal/`** = 管理 API + Portal；**`danmo-relay/`** = 仅转发。
+Schema 由进程启动时按引擎目录增量迁移（`crates/core/migrations/sqlite/`；MySQL 即将支持）。
+
+**发布产物：** GitHub Release / `v*` tag 推送 **GHCR 镜像**（见 [RELEASE-LAYOUT.md](RELEASE-LAYOUT.md)），无二进制 tar。
 
 ## 推荐拓扑
 
 ```text
-api.example.com:443   ──► Nginx ──► http://127.0.0.1:3000  (danmo-relay)
-admin.example.com:443 ──► Nginx ──► 静态 Portal + /api ──► http://127.0.0.1:3001
-user.example.com:443  ──► Nginx ──► 静态 Portal + /api ──► http://127.0.0.1:3002
+api.example.com:80/443   ──► edge (Nginx) ──► relay:3000   （Compose 内网）
+admin.example.com        ──► edge (静态 admin + /api) ──► admin:3001
+user.example.com         ──► edge (静态 user  + /api) ──► user:3002
 ```
 
-三进程共用同一逻辑库（sqlite 现用；mysql 即将支持）。**不要**按角色拆三套库。
+三进程共用同一逻辑库与 `ENCRYPTION_KEY`。可选前置四层 LB → 主机 edge:443。
 
-## 首次发布
+## 首次发布（云本机 / 本机整栈）
 
 ```bash
-# 解压 Release 主 tar 后，在包内或拷到 /opt/danmo 后：
-sudo ./deploy/scripts/install.sh
-# 分包机示例：
-sudo ./deploy/scripts/install.sh --role=user --prefix=/opt/danmo-user
-sudo ./deploy/scripts/install.sh --role=relay --prefix=/opt/danmo-relay --skip-nginx   # 或按需
+cp .env.example .env   # 修改 ENCRYPTION_KEY、域名、密码；生产 SEED_DEMO=0
+./deploy/scripts/install.sh
+# 或：
+# COMPOSE_PROFILES=all docker compose up -d --build
 ```
 
-`install.sh`：安装二进制/Portal、`.env`、systemd、Nginx，并启动服务。SQL **不由脚本执行**，进程启动时 migrate。
+`install.sh`：写入/更新 `.env`、按 `--role=` 选择 Compose **profiles**、`docker compose up -d`。SQL **不由脚本执行**。
 
-仅 Nginx：`sudo ./deploy/scripts/install.sh --nginx-only`  
-（旧名 `setup-nginx.sh` 已转发到该入口。）
+分包角色示例：
+
+```bash
+./deploy/scripts/install.sh --role=relay
+./deploy/scripts/install.sh --role=admin --api-domain=api.example.com --admin-domain=admin.example.com
+```
+
+TLS（edge 终结）：证书放入 `./certs/fullchain.pem` 与 `privkey.pem`，然后：
+
+```bash
+./deploy/scripts/install.sh --enable-tls --api-domain=api.example.com \
+  --admin-domain=admin.example.com --user-domain=user.example.com
+```
 
 ## 升级
 
-`install.sh` 会写入安装状态（**不是**猜目录）：
-
-| 文件 | 用途 |
-|------|------|
-| `${PREFIX}/danmo-install.conf` | 该安装根下的记录 |
-| `/etc/danmo/install.conf` | **upgrade 默认读取** |
-| `/etc/danmo/installs.d/<role>.conf` | 同机多角色时按 `--role=` 选用 |
-
 ```bash
-cd /tmp
-wget https://github.com/danmo-ai/danmo-router/releases/download/vX.Y.Z/danmo-router-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
-tar -xzf danmo-router-vX.Y.Z-*.tar.gz
-cd danmo-router-vX.Y.Z-*
-sudo ./deploy/scripts/upgrade.sh
-# --from-dir 默认=本解压根；PREFIX/ROLE 读 /etc/danmo/install.conf
-
-# 同机多套或覆盖：
-sudo ./deploy/scripts/upgrade.sh --prefix=/opt/danmo-user --role=user
+./deploy/scripts/upgrade.sh          # pull GHCR 镜像并 recreate
+./deploy/scripts/upgrade.sh --build  # 从当前源码重建
 ```
 
-停服务 → 备份并替换二进制/Portal → 启动；**仅应用未登记的增量 SQL**（`schema_migrations`）。
+升级前备份 Compose 卷中的 SQLite，并保管 `.env` 里的 `ENCRYPTION_KEY`。
+
+## 云 Serverless 容器
+
+同一套 GHCR 镜像：
+
+| 镜像 | 说明 |
+|------|------|
+| `ghcr.io/danmo-ai/danmo-relay` | 转发 |
+| `ghcr.io/danmo-ai/danmo-admin` | 管理 API |
+| `ghcr.io/danmo-ai/danmo-user` | 用户 API |
+| `ghcr.io/danmo-ai/danmo-edge` | Nginx + Portal 静态 |
+
+探活 `GET /healthz`；relay 长连接需加大空闲/请求超时；SQLite 需持久卷（或待 MySQL）。Portal 仍由 **edge** 提供，不用对象存储 CDN。厂商说明见 [docs/operations.md](../docs/operations.md)。
 
 ## 文件说明
 
-| 文件 | 用途 |
+| 路径 | 用途 |
 |------|------|
-| `scripts/install.sh` | **首次发布** |
-| `scripts/upgrade.sh` | **升级** |
-| `scripts/setup-nginx.sh` | 兼容 → `install.sh --nginx-only` |
-| `examples/nginx/*` | Nginx 模板 |
-| `examples/systemd/*` | systemd 模板 |
-| `packages/README.md` | 按角色分包说明 |
+| [`compose.yml`](../compose.yml) | 四服务 Compose |
+| [`Dockerfile`](../Dockerfile) | 多 target：relay/admin/user/edge |
+| `compose/nginx/` | edge Nginx 模板与入口脚本 |
+| `scripts/install.sh` | 首次 Compose 发布 |
+| `scripts/upgrade.sh` | Compose 升级 |
+| `packages/README.md` | 镜像 / profile 角色说明 |
 
-详细说明见 [docs/operations.md](../docs/operations.md) 与仓库根 [AGENTS.md](../AGENTS.md)。
+开发与单测仍用 `make check` / `make run-*`；整栈冒烟用 Compose。
