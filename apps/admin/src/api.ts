@@ -71,5 +71,54 @@ export const api = {
   modelPrices: () => request<any[]>('/api/admin/model-prices'),
   upsertModelPrice: (body: any) =>
     request('/api/admin/model-prices', { method: 'PUT', body: JSON.stringify(body) }),
-  logs: () => request<any[]>('/api/admin/logs?limit=100'),
+  groupRatios: () => request<any[]>('/api/admin/group-ratios'),
+  upsertGroupRatio: (group_name: string, ratio: number) =>
+    request('/api/admin/group-ratios', {
+      method: 'PUT',
+      body: JSON.stringify({ group_name, ratio }),
+    }),
+  logs: (q: LogQuery = {}) => request<any[]>(logPath('/api/admin/logs', q)),
+  testChannel: (id: number) =>
+    request<any>(`/api/admin/channels/${id}/test`, { method: 'POST' }),
+  resetPassword: (id: number, password: string) =>
+    request(`/api/admin/users/${id}/password`, {
+      method: 'POST',
+      body: JSON.stringify({ password }),
+    }),
+  userTokens: (id: number) => request<any[]>(`/api/admin/users/${id}/tokens`),
+  setUserTokenStatus: (userId: number, tokenId: number, status: string) =>
+    request(`/api/admin/users/${userId}/tokens/${tokenId}/status`, {
+      method: 'POST',
+      body: JSON.stringify({ status }),
+    }),
+  deleteUserToken: (userId: number, tokenId: number) =>
+    request(`/api/admin/users/${userId}/tokens/${tokenId}`, { method: 'DELETE' }),
+  redemptions: () => request<any[]>('/api/admin/redemptions'),
+  createRedemptions: (body: { name: string; quota: number; count: number }) =>
+    request<any[]>('/api/admin/redemptions', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  deleteRedemption: (id: number) =>
+    request(`/api/admin/redemptions/${id}`, { method: 'DELETE' }),
+}
+
+export type LogQuery = {
+  limit?: number
+  offset?: number
+  user_id?: string
+  model?: string
+  status?: string
+  channel_id?: string
+}
+
+function logPath(base: string, q: LogQuery) {
+  const p = new URLSearchParams()
+  p.set('limit', String(q.limit ?? 50))
+  p.set('offset', String(q.offset ?? 0))
+  if (q.user_id) p.set('user_id', q.user_id)
+  if (q.model) p.set('model', q.model)
+  if (q.status) p.set('status', q.status)
+  if (q.channel_id) p.set('channel_id', q.channel_id)
+  return `${base}?${p.toString()}`
 }

@@ -2,6 +2,17 @@ use crate::db::DbPool;
 use crate::error::AppResult;
 use crate::models::{LogEntry, OverviewStats};
 use crate::usage::Usage;
+use sqlx::QueryBuilder;
+
+#[derive(Debug, Clone, Default)]
+pub struct LogQuery {
+    pub user_id: Option<i64>,
+    pub model: Option<String>,
+    pub status: Option<String>,
+    pub channel_id: Option<i64>,
+    pub limit: i64,
+    pub offset: i64,
+}
 
 #[derive(Debug, Clone)]
 pub struct NewLog {
@@ -88,34 +99,39 @@ pub async fn insert_log(pool: &DbPool, entry: NewLog) -> AppResult<LogEntry> {
         .await?)
 }
 
-pub async fn list_logs(
-    pool: &DbPool,
-    user_id: Option<i64>,
-    limit: i64,
-    offset: i64,
-) -> AppResult<Vec<LogEntry>> {
-    let limit = limit.clamp(1, 200);
-    let offset = offset.max(0);
-    if let Some(uid) = user_id {
-        Ok(
-            sqlx::query_as(
-                "SELECT * FROM logs WHERE user_id = ? ORDER BY id DESC LIMIT ? OFFSET ?",
-            )
-            .bind(uid)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(pool)
-            .await?,
-        )
+pub async fn list_logs(pool: &DbPool, query: &LogQuery) -> AppResult<Vec<LogEntry>> {
+    let limit = if query.limit <= 0 {
+        50
     } else {
-        Ok(
-            sqlx::query_as("SELECT * FROM logs ORDER BY id DESC LIMIT ? OFFSET ?")
-                .bind(limit)
-                .bind(offset)
-                .fetch_all(pool)
-                .await?,
-        )
+        query.limit.min(200)
+    };
+    let offset = query.offset.max(0);
+    let mut qb: QueryBuilder<sqlx::Sqlite> = QueryBuilder::new("SELECT * FROM logs WHERE 1 = 1");
+    if let Some(uid) = query.user_id {
+        qb.push(" AND user_id = ").push_bind(uid);
     }
+    if let Some(model) = nonempty(&query.model) {
+        qb.push(" AND model = ").push_bind(model);
+    }
+    if let Some(status) = nonempty(&query.status) {
+        qb.push(" AND status = ").push_bind(status);
+    }
+    if let Some(channel_id) = query.channel_id {
+        qb.push(" AND channel_id = ").push_bind(channel_id);
+    }
+    qb.push(" ORDER BY id DESC LIMIT ")
+        .push_bind(limit)
+        .push(" OFFSET ")
+        .push_bind(offset);
+    Ok(qb.build_query_as().fetch_all(pool).await?)
+}
+
+fn nonempty(value: &Option<String>) -> Option<String> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 pub async fn overview(pool: &DbPool) -> AppResult<OverviewStats> {
@@ -135,6 +151,18 @@ pub async fn overview(pool: &DbPool) -> AppResult<OverviewStats> {
     let total_channels: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM channels")
         .fetch_one(pool)
         .await?;
+    let today_requests: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM logs WHERE created_at >= date('now')")
+            .fetch_one(pool)
+            .await?;
+    let failed_requests: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM logs WHERE status != 'success'")
+            .fetch_one(pool)
+            .await?;
+    let today_quota: (i64,) =
+        sqlx::query_as("SELECT COALESCE(SUM(quota), 0) FROM logs WHERE created_at >= date('now')")
+            .fetch_one(pool)
+            .await?;
 
     Ok(OverviewStats {
         total_requests: total_requests.0,
@@ -142,5 +170,8 @@ pub async fn overview(pool: &DbPool) -> AppResult<OverviewStats> {
         total_quota: total_quota.0,
         total_users: total_users.0,
         total_channels: total_channels.0,
+        today_requests: today_requests.0,
+        failed_requests: failed_requests.0,
+        today_quota: today_quota.0,
     })
 }
