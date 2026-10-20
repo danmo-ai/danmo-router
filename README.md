@@ -39,7 +39,7 @@ User UI  ──────► danmo-user  × 1..N
 | `POST /v1beta/models/{model}:streamGenerateContent` | Gemini 流式 |
 | `GET /v1/models` | 模型列表 |
 
-完整的方言列表、转发判定、数据模型和计费公式见 [系统架构](docs/architecture.md)。
+完整的方言列表、转发判定、数据模型和计费公式见 [系统架构](docs/architecture.md)。渠道熔断、429 降权及与常见开源中转站的对比见 [渠道健康与选路](docs/channel-health.md)。
 
 ## Makefile
 
@@ -113,6 +113,8 @@ git tag v0.1.0 && git push origin v0.1.0
 ## 环境变量
 
 见 [`.env.example`](.env.example)。`PORT` 未设置时各二进制使用上表默认端口。
+
+relay 进程另支持渠道健康相关变量（`CB_*`、`RL_*`，默认开启），说明见 [渠道健康与选路](docs/channel-health.md#环境变量)。
 
 ## 调用 API
 
