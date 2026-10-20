@@ -9,6 +9,7 @@
 | 系统设计（协议、方言、计费、渠道健康、`CB_*`/`RL_*`） | [architecture.md](architecture.md) |
 | 与同类项目对比 | [comparison.md](comparison.md) |
 | 合法授权、可接受使用与责任边界 | [compliance.md](compliance.md) |
+| Nginx / systemd 示例 | [deploy/`](../deploy/README.md)（`make package` → `dist/deploy/`） |
 | 本地开发与 Makefile | [README.md](../README.md) |
 | 环境变量模板 | [`.env.example`](../.env.example) |
 
@@ -65,8 +66,15 @@ make check   # fmt + clippy + test
 
 ## 生产部署（拆分）
 
-1. 将 `dist/bin` 安装到统一路径（如 `/opt/danmo/bin`），`.env` 放在 `/opt/danmo/.env`。
-2. 三组 systemd（或容器）进程共享同一 `EnvironmentFile`，仅 `PORT` 与 `ExecStart` 二进制不同。
+**TLS 建议：** `danmo-relay` 仅提供 **HTTP**（默认 `:3000`）。公网 HTTPS 由 **前置 Nginx** 终结证书，再反代到 `127.0.0.1:3000`（或本机 `:3000`）；大流量与流式场景不要在 relay 进程内做 TLS。可复制仓库 [`deploy/examples/nginx/`](../deploy/examples/nginx/)（`make package` 后在 `dist/deploy/examples/nginx/`），Certbot 说明见 [`deploy/examples/nginx/README.md`](../deploy/examples/nginx/README.md)。
+
+```text
+Client ──TLS──► Nginx:443 ──HTTP──► danmo-relay:3000
+         （可选）四层 LB TCP:443 ──► 节点 Nginx:443
+```
+
+1. 将 `dist/bin` 安装到统一路径（如 `/opt/danmo/bin`），Portal 到 `/opt/danmo/apps/`，`.env` 放在 `/opt/danmo/.env`。
+2. systemd 模板见 [`deploy/examples/systemd/`](../deploy/examples/systemd/)；三组进程共享 `EnvironmentFile`，仅 `PORT` 与二进制不同。
 3. 反代示例：
 
 | 公网域名 | 后端 | 注意 |
@@ -77,31 +85,7 @@ make check   # fmt + clippy + test
 | 管理 Portal | 静态 `admin/dist`，`/api` → admin API | |
 | 用户 Portal | 静态 `user/dist`，`/api` → user API | |
 
-**systemd 示例（relay）：**
-
-```ini
-[Service]
-EnvironmentFile=/opt/danmo/.env
-Environment=PORT=3000
-ExecStart=/opt/danmo/bin/danmo-relay
-Restart=always
-RestartSec=3
-```
-
-admin / user 同理，改 `PORT` 与 `ExecStart` 中的二进制名。
-
-**Nginx relay 片段：**
-
-```nginx
-location / {
-    proxy_pass http://127.0.0.1:3000;
-    proxy_http_version 1.1;
-    proxy_set_header Connection "";
-    proxy_buffering off;
-    proxy_read_timeout 3600s;
-    proxy_send_timeout 3600s;
-}
-```
+完整 **Nginx** server 块（含 TLS、`/v1` 流式、`80` ACME）见 [`deploy/examples/nginx/danmo-relay.conf`](../deploy/examples/nginx/danmo-relay.conf)；Portal 见 `danmo-portal-admin.conf` / `danmo-portal-user.conf`。
 
 ## 云厂商平台部署
 
@@ -137,7 +121,7 @@ user.example.com    ──► CDN ──► OSS/COS（静态）+ 回源 /api ─
 
 **Portal 构建：** `npm ci && VITE_COMPLIANCE_URL=… npm run build`（admin/user 各一份）。浏览器请求相对路径 `/api/*` 且带 Cookie，**须** Portal 与 `/api` **同域名**（CDN 路径回源或七层反代）。
 
-**转发面用四层 LB：** Relay 含长连接 SSE/流式；四层 TCP 不分片缓冲 HTTP body。TLS 推荐 **LB TCP:443 → 实例 Nginx:443 → 127.0.0.1:3000**，Nginx 配置见上文 relay 片段。
+**转发面用四层 LB：** Relay 含长连接 SSE/流式；四层 TCP 不分片缓冲 HTTP body。TLS 推荐 **LB TCP:443 → 实例 Nginx:443 → 127.0.0.1:3000**，示例见 [`deploy/examples/nginx/danmo-relay.conf`](../deploy/examples/nginx/danmo-relay.conf)。
 
 ### 阿里云
 

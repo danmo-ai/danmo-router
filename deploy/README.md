@@ -1,0 +1,33 @@
+# 部署示例（Nginx + systemd）
+
+`danmo-relay` / `danmo-admin` / `danmo-user` 监听 **HTTP**（默认 3000/3001/3002）。公网 **TLS 在 Nginx 终结**，再反代到本机 loopback。Release 包 `dist/deploy/examples/` 与本目录相同。
+
+## 推荐拓扑
+
+```text
+api.example.com:443   ──► Nginx ──► http://127.0.0.1:3000  (danmo-relay)
+admin.example.com:443 ──► Nginx ──► 静态 Portal + /api ──► http://127.0.0.1:3001
+user.example.com:443  ──► Nginx ──► 静态 Portal + /api ──► http://127.0.0.1:3002
+```
+
+前面可有 **四层 LB（TCP:443）** 做流量分发；Nginx 跑在每台 relay/Portal 机器上。LB 健康检查可直连 **3000** 的 `GET /healthz`（不经 TLS）。
+
+## 安装步骤（单机示例）
+
+1. 安装二进制与静态资源（`make package` 产物）到 `/opt/danmo/`。
+2. 复制 [examples/systemd/danmo-relay.service](examples/systemd/danmo-relay.service) 等到 `/etc/systemd/system/`，`systemctl enable --now danmo-relay`。
+3. 安装 Nginx，复制 [examples/nginx/](examples/nginx/) 下配置到 `/etc/nginx/conf.d/` 或 `sites-enabled/`，改 `server_name`、证书路径、`root`。
+4. 证书（二选一）：
+   - **Let’s Encrypt（Certbot）**：见 [examples/nginx/README.md](examples/nginx/README.md)。
+   - **云证书 / 自签**：把 `ssl_certificate` / `ssl_certificate_key` 指到 PEM 文件。
+
+## 文件说明
+
+| 文件 | 用途 |
+|------|------|
+| `examples/nginx/danmo-relay.conf` | 转发 API，流式友好 |
+| `examples/nginx/danmo-portal-admin.conf` | 管理 Portal + `/api` → admin |
+| `examples/nginx/danmo-portal-user.conf` | 用户 Portal + `/api` → user |
+| `examples/systemd/danmo-*.service` | systemd 单元模板 |
+
+详细说明见 [docs/operations.md](../docs/operations.md)。

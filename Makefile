@@ -85,6 +85,7 @@ package: release portals-build ## Assemble release artifacts under dist/
 	cp -R apps/admin/dist/. $(DIST_DIR)/apps/admin/
 	cp -R apps/user/dist/. $(DIST_DIR)/apps/user/
 	cp .env.example $(DIST_DIR)/
+	cp -R deploy/. $(DIST_DIR)/deploy/
 	@echo "Artifacts in $(DIST_DIR)/"
 
 .PHONY: clean
