@@ -1,5 +1,5 @@
 use crate::crypto;
-use crate::db::{self, DbPool};
+use crate::db::{self, DbPool, DbTx, SqlEngine};
 use crate::dialect;
 use crate::error::{AppError, AppResult};
 use crate::models::{Channel, ChannelModel};
@@ -159,35 +159,38 @@ pub async fn create_channel(
 ) -> AppResult<Channel> {
     let rows = input.validate()?;
     let key_enc = crypto::encrypt_secret(enc_key, &input.key).map_err(AppError::Other)?;
+    let engine = db::engine(pool);
+    let now = db::now();
     let mut tx = db::begin_write(pool).await?;
-    let result = sqlx::query(
+    let sql = format!(
         r#"
         INSERT INTO channels
             (name, type, key_enc, base_url, group_name, priority, weight, status,
              relay_mode, upstream_protocol, auth_style, inject_stream_usage,
-             default_dialect, vendor)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             default_dialect, vendor, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?){}
         "#,
-    )
-    .bind(&input.name)
-    .bind(&input.type_)
-    .bind(&key_enc)
-    .bind(input.base_url.trim_end_matches('/'))
-    .bind(&input.group_name)
-    .bind(input.priority)
-    .bind(input.weight.max(1))
-    .bind(&input.status)
-    .bind(&input.relay_mode)
-    .bind(&input.upstream_protocol)
-    .bind(&input.auth_style)
-    .bind(i64::from(input.inject_stream_usage))
-    .bind(default_dialect(&input))
-    .bind(input.vendor.trim())
-    .execute(&mut *tx)
-    .await?;
-
-    let id = result.last_insert_rowid();
-    write_models(&mut tx, id, &input.group_name, &rows).await?;
+        engine.returning_id()
+    );
+    let query = sqlx::query(&sql)
+        .bind(&input.name)
+        .bind(&input.type_)
+        .bind(&key_enc)
+        .bind(input.base_url.trim_end_matches('/'))
+        .bind(&input.group_name)
+        .bind(input.priority)
+        .bind(input.weight.max(1))
+        .bind(&input.status)
+        .bind(&input.relay_mode)
+        .bind(&input.upstream_protocol)
+        .bind(&input.auth_style)
+        .bind(i64::from(input.inject_stream_usage))
+        .bind(default_dialect(&input))
+        .bind(input.vendor.trim())
+        .bind(&now)
+        .bind(&now);
+    let id = db::insert_id(engine, query, &mut *tx).await?;
+    write_models(&mut tx, engine, id, &input.group_name, &rows).await?;
     tx.commit().await?;
     get_by_id(pool, id).await
 }
@@ -206,6 +209,7 @@ pub async fn update_channel(
         crypto::encrypt_secret(enc_key, &input.key).map_err(AppError::Other)?
     };
 
+    let engine = db::engine(pool);
     let mut tx = db::begin_write(pool).await?;
     sqlx::query(
         r#"
@@ -214,7 +218,7 @@ pub async fn update_channel(
             group_name = ?, priority = ?, weight = ?, status = ?,
             relay_mode = ?, upstream_protocol = ?, auth_style = ?,
             inject_stream_usage = ?, default_dialect = ?, vendor = ?,
-            updated_at = datetime('now')
+            updated_at = ?
         WHERE id = ?
         "#,
     )
@@ -232,11 +236,12 @@ pub async fn update_channel(
     .bind(i64::from(input.inject_stream_usage))
     .bind(default_dialect(&input))
     .bind(input.vendor.trim())
+    .bind(db::now())
     .bind(id)
     .execute(&mut *tx)
     .await?;
 
-    write_models(&mut tx, id, &input.group_name, &rows).await?;
+    write_models(&mut tx, engine, id, &input.group_name, &rows).await?;
     tx.commit().await?;
     get_by_id(pool, id).await
 }
@@ -249,8 +254,9 @@ fn default_dialect(input: &ChannelInput) -> &str {
 }
 
 pub async fn set_status(pool: &DbPool, id: i64, status: &str) -> AppResult<Channel> {
-    sqlx::query("UPDATE channels SET status = ?, updated_at = datetime('now') WHERE id = ?")
+    sqlx::query("UPDATE channels SET status = ?, updated_at = ? WHERE id = ?")
         .bind(status)
+        .bind(db::now())
         .bind(id)
         .execute(pool)
         .await?;
@@ -328,7 +334,8 @@ pub async fn decrypt_channel_key(enc_key: &[u8; 32], channel: &Channel) -> AppRe
 
 /// Replaces the channel's model rows and rebuilds its abilities from them.
 async fn write_models(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    tx: &mut DbTx,
+    engine: &dyn SqlEngine,
     channel_id: i64,
     group_name: &str,
     rows: &[ChannelModelInput],
@@ -339,6 +346,10 @@ async fn write_models(
             .execute(&mut **tx)
             .await?;
     }
+    let insert_ability = format!(
+        "{} INTO abilities (channel_id, group_name, model) VALUES (?, ?, ?)",
+        engine.insert_ignore()
+    );
     for row in rows {
         sqlx::query(
             "INSERT INTO channel_models (channel_id, model, upstream_model, upstream_dialect) VALUES (?, ?, ?, ?)",
@@ -349,14 +360,12 @@ async fn write_models(
         .bind(&row.upstream_dialect)
         .execute(&mut **tx)
         .await?;
-        sqlx::query(
-            "INSERT OR IGNORE INTO abilities (channel_id, group_name, model) VALUES (?, ?, ?)",
-        )
-        .bind(channel_id)
-        .bind(group_name)
-        .bind(&row.model)
-        .execute(&mut **tx)
-        .await?;
+        sqlx::query(&insert_ability)
+            .bind(channel_id)
+            .bind(group_name)
+            .bind(&row.model)
+            .execute(&mut **tx)
+            .await?;
     }
     Ok(())
 }

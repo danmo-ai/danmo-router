@@ -2,7 +2,7 @@
 
 `danmo-relay` / `danmo-admin` / `danmo-user` 监听 HTTP（默认 3000/3001/3002）。公网入口是 **Compose 内置的 `danmo-edge`（Nginx）**；Portal 静态资源打进 edge 镜像，**不走 OSS/CDN**。Compose 下后端使用 `network_mode: service:edge`，与 Nginx **共享网络命名空间**，仅经 `127.0.0.1` 反代；**宿主机只映射 edge 的 80/443**。
 
-Schema 由进程启动时按引擎目录增量迁移（`crates/core/migrations/sqlite/`；MySQL 即将支持）。
+Schema 由进程启动时按引擎目录增量迁移（`crates/core/migrations/sqlite/` 或 `mysql/`，按 `DATABASE_URL` 选择）。默认 SQLite 存于 `/data` 卷；多实例在 `.env` 设 `DANMO_DATABASE_URL=mysql://...`。
 
 **发布产物：** GitHub Release / `v*` tag 推送 **GHCR 镜像**（见 [RELEASE-LAYOUT.md](RELEASE-LAYOUT.md)），无二进制 tar。
 
@@ -48,7 +48,7 @@ TLS（edge 终结）：证书放入 `./certs/fullchain.pem` 与 `privkey.pem`，
 ./deploy/scripts/upgrade.sh --build  # 从当前源码重建
 ```
 
-升级前备份 Compose 卷中的 SQLite，并保管 `.env` 里的 `ENCRYPTION_KEY`。
+升级前备份数据库（Compose 卷中的 SQLite，或 MySQL dump / 快照），并保管 `.env` 里的 `ENCRYPTION_KEY`。
 
 ## 云 Serverless 容器
 
@@ -61,7 +61,7 @@ TLS（edge 终结）：证书放入 `./certs/fullchain.pem` 与 `privkey.pem`，
 | `ghcr.io/danmo-ai/danmo-user` | 用户 API |
 | `ghcr.io/danmo-ai/danmo-edge` | Nginx + Portal 静态 |
 
-探活 `GET /healthz`；relay 长连接需加大空闲/请求超时；SQLite 需持久卷（或待 MySQL）。Portal 仍由 **edge** 提供，不用对象存储 CDN。厂商说明见 [docs/operations.md](../docs/operations.md)。
+探活 `GET /healthz`；relay 长连接需加大空闲/请求超时；Serverless 多副本用托管 MySQL（`DATABASE_URL=mysql://...`），不要依赖实例本地盘上的 SQLite。Portal 仍由 **edge** 提供，不用对象存储 CDN。厂商说明见 [docs/operations.md](../docs/operations.md)。
 
 ## 文件说明
 

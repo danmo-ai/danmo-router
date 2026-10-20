@@ -9,16 +9,17 @@ use danmo_core::usage::Usage;
 use std::sync::Arc;
 use tempfile::tempdir;
 
-async fn setup() -> (danmo_core::DbPool, Arc<Config>, tempfile::TempDir) {
-    let dir = tempdir().unwrap();
-    let db_path = dir.path().join("test.db");
+mod common;
+
+async fn setup() -> (danmo_core::DbPool, Arc<Config>, common::TestDb) {
+    let db = common::test_db().await;
     let mut config = Config::from_env().unwrap();
-    config.database_url = format!("sqlite://{}?mode=rwc", db_path.display());
+    config.database_url = db.url.clone();
     config.seed_demo = false;
     config.admin_username = "admin".into();
     config.admin_password = "admin123".into();
     let pool = connect(&config).await.unwrap();
-    (pool, Arc::new(config), dir)
+    (pool, Arc::new(config), db)
 }
 
 #[tokio::test]

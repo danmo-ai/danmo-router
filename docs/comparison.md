@@ -100,7 +100,7 @@ danmo-router 的差异化不在「渠道数量」，而在：
 
 | 维度 | One API | New API | LiteLLM | GPT-Load | Sub2API | danmo-router |
 |------|---------|---------|---------|----------|---------|--------------|
-| 最小依赖 | SQLite 单容器 | SQLite 单容器；生产常用 PG + Redis | Python 运行时；虚拟 Key 需 DB | 单 Go 二进制；SQLite/MySQL/PG | **强制 PG 15+ 与 Redis 7+** | Rust 二进制；SQLite WAL（文档写明后续 Postgres）；三进程共 `DATABASE_URL` |
+| 最小依赖 | SQLite 单容器 | SQLite 单容器；生产常用 PG + Redis | Python 运行时；虚拟 Key 需 DB | 单 Go 二进制；SQLite/MySQL/PG | **强制 PG 15+ 与 Redis 7+** | Rust 二进制；SQLite WAL 单机 / MySQL 多实例；三进程共 `DATABASE_URL` |
 | 镜像体积 / 冷启动 | 小 | 中 | 偏大（Python 依赖） | 很小 | 中（含依赖栈） | 原生二进制，无 Node 运行时在服务端路径 |
 | K8s / Helm / IaC | 社区方案 | Compose / 面板一键为主 | **官方 Helm、Terraform 故事完整** | 二进制/Docker | Compose 脚本 | 官方 Compose + GHCR 镜像 / 云 Serverless 容器（无官方 Helm） |
 | 水平扩展 | 注意 SQLite 与会话 | 集群模式 + 外部 LB；状态在 DB/Redis | Proxy 可多副本 | 视部署 | 有状态依赖 | **优先扩 `danmo-relay`**；限额为**进程内存**，多副本不共享计数 |

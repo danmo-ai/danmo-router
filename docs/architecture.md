@@ -20,7 +20,7 @@ Client ──► LB ──► danmo-relay × N ──► upstream LLM
 Admin UI ──────► danmo-admin
 User UI  ──────► danmo-user
                       │
-                      └── SQLite WAL（后续 Postgres）
+                      └── SQLite WAL（单机）/ MySQL（多实例）
 ```
 
 代码分五层：`danmo-core`（模型、方言注册表、路由、计费、迁移）、`danmo-relay`（协议编解码与转发）、`danmo-admin-api`、`danmo-user-api`、`danmo-server`（二进制）。前端在 `apps/admin` 和 `apps/user`。
@@ -183,7 +183,9 @@ model_prices
   native_dialects   JSON，协议 → 方言
 ```
 
-渠道密钥以 `ENCRYPTION_KEY` 加密后存放。迁移按**数据库引擎**分目录（`crates/core/migrations/sqlite/`，即将支持 `mysql/`），记在 `schema_migrations`，每个版本只执行一次。`003_channel_models.sql` 把旧的逗号分隔模型列表和 `model_mapping` 拆成行，并把 `native_usage` 改成 `native_dialects`。规则见 [AGENTS.md](../AGENTS.md)。
+渠道密钥以 `ENCRYPTION_KEY` 加密后存放。迁移按**数据库引擎**分目录（`crates/core/migrations/sqlite/`、`mysql/`，同号同语义），记在 `schema_migrations`，每个版本只执行一次。`003_channel_models.sql` 把旧的逗号分隔模型列表和 `model_mapping` 拆成行，并把 `native_usage` 改成 `native_dialects`。规则见 [AGENTS.md](../AGENTS.md)。
+
+数据访问不用 ORM：业务代码在 `sqlx::Any` 连接池上写两种引擎通用的 SQL，方言差异集中在 `SqlEngine` trait（`crates/core/src/db/`）。trait 提供默认实现，`Sqlite` / `Mysql` 只覆盖不同的部分：取自增 id（`RETURNING id` vs `last_insert_id`）、`INSERT OR IGNORE` vs `INSERT IGNORE`、upsert 语法、写事务开头（`BEGIN IMMEDIATE`）与行锁（`FOR UPDATE`）、迁移互斥（MySQL `GET_LOCK`）。时间统一由 Rust 生成 UTC 文本绑定，不依赖库函数。
 
 ## 用量与计费
 

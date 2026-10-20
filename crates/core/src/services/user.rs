@@ -1,5 +1,5 @@
 use crate::crypto;
-use crate::db::DbPool;
+use crate::db::{self, DbPool};
 use crate::error::{AppError, AppResult};
 use crate::models::User;
 
@@ -17,23 +17,28 @@ pub async fn create_user(
         ));
     }
     let password_hash = crypto::hash_password(password).map_err(AppError::Other)?;
-    let result = sqlx::query(
+    let now = db::now();
+    let engine = db::engine(pool);
+    let sql = format!(
         r#"
-        INSERT INTO users (username, password_hash, role, quota, used_quota, group_name, status)
-        VALUES (?, ?, ?, ?, 0, ?, 'active')
+        INSERT INTO users
+            (username, password_hash, role, quota, used_quota, group_name, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 0, ?, 'active', ?, ?){}
         "#,
-    )
-    .bind(username.trim())
-    .bind(password_hash)
-    .bind(role)
-    .bind(quota)
-    .bind(group_name)
-    .execute(pool)
-    .await;
+        engine.returning_id()
+    );
+    let query = sqlx::query(&sql)
+        .bind(username.trim())
+        .bind(password_hash)
+        .bind(role)
+        .bind(quota)
+        .bind(group_name)
+        .bind(&now)
+        .bind(&now);
 
-    match result {
-        Ok(r) => get_by_id(pool, r.last_insert_rowid()).await,
-        Err(sqlx::Error::Database(e)) if e.message().contains("UNIQUE") => {
+    match db::insert_id(engine, query, pool).await {
+        Ok(id) => get_by_id(pool, id).await,
+        Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
             Err(AppError::Conflict("username already exists".into()))
         }
         Err(e) => Err(e.into()),
@@ -94,7 +99,7 @@ pub async fn update_user(
     sqlx::query(
         r#"
         UPDATE users
-        SET quota = ?, group_name = ?, status = ?, role = ?, updated_at = datetime('now')
+        SET quota = ?, group_name = ?, status = ?, role = ?, updated_at = ?
         WHERE id = ?
         "#,
     )
@@ -102,6 +107,7 @@ pub async fn update_user(
     .bind(&user.group_name)
     .bind(&user.status)
     .bind(&user.role)
+    .bind(db::now())
     .bind(id)
     .execute(pool)
     .await?;
@@ -109,8 +115,9 @@ pub async fn update_user(
 }
 
 pub async fn adjust_quota(pool: &DbPool, id: i64, delta: i64) -> AppResult<User> {
-    sqlx::query("UPDATE users SET quota = quota + ?, updated_at = datetime('now') WHERE id = ?")
+    sqlx::query("UPDATE users SET quota = quota + ?, updated_at = ? WHERE id = ?")
         .bind(delta)
+        .bind(db::now())
         .bind(id)
         .execute(pool)
         .await?;
@@ -125,8 +132,9 @@ pub async fn set_password(pool: &DbPool, id: i64, password: &str) -> AppResult<(
     }
     let _ = get_by_id(pool, id).await?;
     let password_hash = crypto::hash_password(password).map_err(AppError::Other)?;
-    sqlx::query("UPDATE users SET password_hash = ?, updated_at = datetime('now') WHERE id = ?")
+    sqlx::query("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?")
         .bind(password_hash)
+        .bind(db::now())
         .bind(id)
         .execute(pool)
         .await?;

@@ -16,8 +16,9 @@ name: danmo
 
 x-app-env: &app-env
   HOST: "0.0.0.0"
-  # Always use the Compose volume path inside containers (do not inherit host-relative sqlite://data/...).
-  DATABASE_URL: sqlite:///data/danmo.db?mode=rwc
+  # Containers ignore the host-relative DATABASE_URL in .env. Default: SQLite on the /data volume.
+  # Several relay replicas or hosts: DANMO_DATABASE_URL=mysql://user:pass@host:3306/danmo
+  DATABASE_URL: ${DANMO_DATABASE_URL:-sqlite:///data/danmo.db?mode=rwc}
   ENCRYPTION_KEY: ${ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
   ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
   ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}

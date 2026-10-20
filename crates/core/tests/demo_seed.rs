@@ -5,23 +5,22 @@ use danmo_core::demo::{DEMO_ALICE_KEY, DEMO_API_KEY, DEMO_BATCH_KEY, DEMO_DISABL
 use danmo_core::services::{
     channel, log as log_svc, redemption, token as token_svc, user as user_svc,
 };
-use tempfile::tempdir;
+mod common;
 
-async fn demo_pool() -> (danmo_core::DbPool, tempfile::TempDir) {
-    let dir = tempdir().unwrap();
-    let db_path = dir.path().join("demo.db");
+async fn demo_pool() -> (danmo_core::DbPool, common::TestDb) {
+    let db = common::test_db().await;
     let mut config = Config::from_env().unwrap();
-    config.database_url = format!("sqlite://{}?mode=rwc", db_path.display());
+    config.database_url = db.url.clone();
     config.seed_demo = true;
     config.admin_username = "admin".into();
     config.admin_password = "admin123".into();
     let pool = connect(&config).await.unwrap();
-    (pool, dir)
+    (pool, db)
 }
 
 #[tokio::test]
 async fn demo_seed_fills_portals_and_does_not_repeat() {
-    let (pool, dir) = demo_pool().await;
+    let (pool, db) = demo_pool().await;
 
     let demo = user_svc::authenticate(&pool, "demo", "demo1234")
         .await
@@ -78,7 +77,7 @@ async fn demo_seed_fills_portals_and_does_not_repeat() {
     assert!(logs.iter().any(|l| l.reasoning_tokens > 0));
 
     let mut again = Config::from_env().unwrap();
-    again.database_url = format!("sqlite://{}?mode=rwc", dir.path().join("demo.db").display());
+    again.database_url = db.url.clone();
     again.seed_demo = true;
     let pool2 = connect(&again).await.unwrap();
     assert_eq!(channel::list_channels(&pool2).await.unwrap().len(), 6);

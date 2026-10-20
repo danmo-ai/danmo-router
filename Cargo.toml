@@ -31,7 +31,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"
 # default-features off: avoid sqlx proc-macro dylib; we use runtime queries only.
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "postgres", "chrono", "uuid", "derive", "migrate"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "any", "sqlite", "mysql", "chrono", "uuid", "derive", "migrate"] }
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 tower = "0.5"

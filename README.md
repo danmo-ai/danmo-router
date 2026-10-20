@@ -31,10 +31,10 @@ Client ──► LB ──► danmo-relay × N  ──► upstream LLM
 Admin UI ──────► danmo-admin × 1..N
 User UI  ──────► danmo-user  × 1..N
                       │
-                      └── shared DB (SQLite WAL / 后续 Postgres)
+                      └── shared DB (SQLite WAL 单机 / MySQL 多实例)
 ```
 
-扩容建议：优先扩 `danmo-relay`；admin/user 通常少量副本即可。多副本写库时请使用支持并发的数据库（当前 SQLite WAL 适合轻量多进程，不适合大量 relay 副本）。渠道上的方言决定请求按哪套厂商规范透传或转换，模型价格上的原厂方言决定客户端看到的字段。
+扩容建议：优先扩 `danmo-relay`；admin/user 通常少量副本即可。SQLite WAL 适合单主机轻量多进程；多副本或多主机时设 `DATABASE_URL=mysql://...`（MySQL 8 / MariaDB 10.5+），见 [运维手册 — 扩缩容](docs/operations.md#扩缩容与容量)。渠道上的方言决定请求按哪套厂商规范透传或转换，模型价格上的原厂方言决定客户端看到的字段。
 
 ## 界面
 
@@ -114,7 +114,7 @@ make run-all-in-one
 
 ## 模拟数据
 
-`SEED_DEMO=1` 时，第一个连上数据库的进程会写入一份示例数据（只写一次；已有用户 `demo` 则跳过）。删掉 SQLite 文件后再启动即可重新生成。
+`SEED_DEMO=1` 时，第一个连上数据库的进程会写入一份示例数据（只写一次；已有用户 `demo` 则跳过）。删掉 SQLite 文件（或清空 MySQL 库）后再启动即可重新生成。
 
 | 账号 | 密码 | 说明 |
 |------|------|------|

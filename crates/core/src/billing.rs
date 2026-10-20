@@ -186,9 +186,10 @@ pub async fn pre_consume(
     let group_ratio = load_group_ratio(pool, group_name).await?;
     let amount = estimate_pre_consume(max_tokens, model_ratio, group_ratio);
 
+    let lock = db::engine(pool).lock_rows();
     let mut tx = db::begin_write(pool).await?;
 
-    let fresh: User = sqlx::query_as("SELECT * FROM users WHERE id = ?")
+    let fresh: User = sqlx::query_as(&format!("SELECT * FROM users WHERE id = ?{lock}"))
         .bind(user.id)
         .fetch_one(&mut *tx)
         .await?;
@@ -198,7 +199,7 @@ pub async fn pre_consume(
         ));
     }
 
-    let fresh_token: Token = sqlx::query_as("SELECT * FROM tokens WHERE id = ?")
+    let fresh_token: Token = sqlx::query_as(&format!("SELECT * FROM tokens WHERE id = ?{lock}"))
         .bind(token.id)
         .fetch_one(&mut *tx)
         .await?;
@@ -208,19 +209,20 @@ pub async fn pre_consume(
         ));
     }
 
-    sqlx::query(
-        "UPDATE users SET used_quota = used_quota + ?, updated_at = datetime('now') WHERE id = ?",
-    )
-    .bind(amount)
-    .bind(user.id)
-    .execute(&mut *tx)
-    .await?;
+    let now = db::now();
+    sqlx::query("UPDATE users SET used_quota = used_quota + ?, updated_at = ? WHERE id = ?")
+        .bind(amount)
+        .bind(&now)
+        .bind(user.id)
+        .execute(&mut *tx)
+        .await?;
 
     if !fresh_token.is_unlimited() {
         sqlx::query(
-            "UPDATE tokens SET remain_quota = remain_quota - ?, updated_at = datetime('now') WHERE id = ?",
+            "UPDATE tokens SET remain_quota = remain_quota - ?, updated_at = ? WHERE id = ?",
         )
         .bind(amount)
+        .bind(&now)
         .bind(token.id)
         .execute(&mut *tx)
         .await?;
@@ -250,19 +252,20 @@ pub async fn settle(pool: &DbPool, session: &BillingSession, usage: &Usage) -> A
 
     let mut tx = db::begin_write(pool).await?;
     if delta != 0 {
-        sqlx::query(
-            "UPDATE users SET used_quota = used_quota + ?, updated_at = datetime('now') WHERE id = ?",
-        )
-        .bind(delta)
-        .bind(session.user_id)
-        .execute(&mut *tx)
-        .await?;
+        let now = db::now();
+        sqlx::query("UPDATE users SET used_quota = used_quota + ?, updated_at = ? WHERE id = ?")
+            .bind(delta)
+            .bind(&now)
+            .bind(session.user_id)
+            .execute(&mut *tx)
+            .await?;
 
         if !session.token_unlimited {
             sqlx::query(
-                "UPDATE tokens SET remain_quota = remain_quota - ?, updated_at = datetime('now') WHERE id = ?",
+                "UPDATE tokens SET remain_quota = remain_quota - ?, updated_at = ? WHERE id = ?",
             )
             .bind(delta)
+            .bind(&now)
             .bind(session.token_id)
             .execute(&mut *tx)
             .await?;
@@ -273,20 +276,21 @@ pub async fn settle(pool: &DbPool, session: &BillingSession, usage: &Usage) -> A
 }
 
 pub async fn refund(pool: &DbPool, session: &BillingSession) -> AppResult<()> {
+    let now = db::now();
     let mut tx = db::begin_write(pool).await?;
-    sqlx::query(
-        "UPDATE users SET used_quota = used_quota - ?, updated_at = datetime('now') WHERE id = ?",
-    )
-    .bind(session.pre_consumed)
-    .bind(session.user_id)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("UPDATE users SET used_quota = used_quota - ?, updated_at = ? WHERE id = ?")
+        .bind(session.pre_consumed)
+        .bind(&now)
+        .bind(session.user_id)
+        .execute(&mut *tx)
+        .await?;
 
     if !session.token_unlimited {
         sqlx::query(
-            "UPDATE tokens SET remain_quota = remain_quota + ?, updated_at = datetime('now') WHERE id = ?",
+            "UPDATE tokens SET remain_quota = remain_quota + ?, updated_at = ? WHERE id = ?",
         )
         .bind(session.pre_consumed)
+        .bind(&now)
         .bind(session.token_id)
         .execute(&mut *tx)
         .await?;
@@ -363,24 +367,29 @@ impl ModelPriceInput {
 
 pub async fn upsert_model_price(pool: &DbPool, input: &ModelPriceInput) -> AppResult<ModelPrice> {
     input.validate()?;
-    sqlx::query(
+    let upsert = db::engine(pool).upsert(
+        "model",
+        &[
+            "model_ratio",
+            "completion_ratio",
+            "cache_read_ratio",
+            "cache_write_ratio",
+            "search_price",
+            "tiers",
+            "periods",
+            "native_dialects",
+            "updated_at",
+        ],
+    );
+    sqlx::query(&format!(
         r#"
         INSERT INTO model_prices
             (model, model_ratio, completion_ratio, cache_read_ratio, cache_write_ratio,
              search_price, tiers, periods, native_dialects, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-        ON CONFLICT(model) DO UPDATE SET
-            model_ratio = excluded.model_ratio,
-            completion_ratio = excluded.completion_ratio,
-            cache_read_ratio = excluded.cache_read_ratio,
-            cache_write_ratio = excluded.cache_write_ratio,
-            search_price = excluded.search_price,
-            tiers = excluded.tiers,
-            periods = excluded.periods,
-            native_dialects = excluded.native_dialects,
-            updated_at = datetime('now')
-        "#,
-    )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        {upsert}
+        "#
+    ))
     .bind(&input.model)
     .bind(input.model_ratio)
     .bind(input.completion_ratio)
@@ -390,6 +399,7 @@ pub async fn upsert_model_price(pool: &DbPool, input: &ModelPriceInput) -> AppRe
     .bind(input.tiers.trim())
     .bind(input.periods.trim())
     .bind(NativeDialects::parse(&input.native_dialects)?.to_json())
+    .bind(db::now())
     .execute(pool)
     .await?;
 
@@ -412,17 +422,13 @@ pub async fn upsert_group_ratio(
     group_name: &str,
     ratio: f64,
 ) -> AppResult<GroupRatio> {
-    sqlx::query(
-        r#"
-        INSERT INTO group_ratios (group_name, ratio, updated_at)
-        VALUES (?, ?, datetime('now'))
-        ON CONFLICT(group_name) DO UPDATE SET
-            ratio = excluded.ratio,
-            updated_at = datetime('now')
-        "#,
-    )
+    let upsert = db::engine(pool).upsert("group_name", &["ratio", "updated_at"]);
+    sqlx::query(&format!(
+        "INSERT INTO group_ratios (group_name, ratio, updated_at) VALUES (?, ?, ?) {upsert}"
+    ))
     .bind(group_name)
     .bind(ratio)
+    .bind(db::now())
     .execute(pool)
     .await?;
 
@@ -435,7 +441,7 @@ pub async fn upsert_group_ratio(
 }
 
 #[allow(dead_code)]
-pub fn build_log_filter<'a>(qb: &mut QueryBuilder<'a, sqlx::Sqlite>, user_id: Option<i64>) {
+pub fn build_log_filter<'a>(qb: &mut QueryBuilder<'a, sqlx::Any>, user_id: Option<i64>) {
     if let Some(uid) = user_id {
         qb.push(" WHERE user_id = ").push_bind(uid);
     }

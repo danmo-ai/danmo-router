@@ -1,5 +1,5 @@
 use crate::crypto;
-use crate::db::DbPool;
+use crate::db::{self, DbPool};
 use crate::error::{AppError, AppResult};
 use crate::models::{Token, User};
 use chrono::{DateTime, NaiveDateTime, Utc};
@@ -32,27 +32,33 @@ pub async fn create_token(
     let key_hash = crypto::hash_token_key(&raw_key);
     let key_prefix = raw_key.chars().take(10).collect::<String>();
     let expired_at = normalize_optional_expiry(expired_at)?;
+    let now = db::now();
+    let engine = db::engine(pool);
 
-    let result = sqlx::query(
+    let sql = format!(
         r#"
         INSERT INTO tokens
-            (user_id, name, key_hash, key_prefix, status, remain_quota, unlimited_quota, expired_at, models, group_name)
-        VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)
+            (user_id, name, key_hash, key_prefix, status, remain_quota, unlimited_quota, expired_at,
+             models, group_name, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?){}
         "#,
-    )
-    .bind(user_id)
-    .bind(name)
-    .bind(&key_hash)
-    .bind(&key_prefix)
-    .bind(remain_quota)
-    .bind(if unlimited_quota { 1 } else { 0 })
-    .bind(expired_at)
-    .bind(models)
-    .bind(group_name)
-    .execute(pool)
-    .await?;
+        engine.returning_id()
+    );
+    let query = sqlx::query(&sql)
+        .bind(user_id)
+        .bind(name)
+        .bind(&key_hash)
+        .bind(&key_prefix)
+        .bind(remain_quota)
+        .bind(if unlimited_quota { 1 } else { 0 })
+        .bind(expired_at)
+        .bind(models)
+        .bind(group_name)
+        .bind(&now)
+        .bind(&now);
+    let id = db::insert_id(engine, query, pool).await?;
 
-    let token = get_by_id(pool, result.last_insert_rowid()).await?;
+    let token = get_by_id(pool, id).await?;
     Ok(CreatedToken { token, raw_key })
 }
 
@@ -78,8 +84,9 @@ pub async fn set_status(pool: &DbPool, id: i64, user_id: i64, status: &str) -> A
     if token.user_id != user_id {
         return Err(AppError::Forbidden("token does not belong to user".into()));
     }
-    sqlx::query("UPDATE tokens SET status = ?, updated_at = datetime('now') WHERE id = ?")
+    sqlx::query("UPDATE tokens SET status = ?, updated_at = ? WHERE id = ?")
         .bind(status)
+        .bind(db::now())
         .bind(id)
         .execute(pool)
         .await?;
@@ -118,7 +125,7 @@ pub async fn update_token(
         r#"
         UPDATE tokens
         SET name = ?, remain_quota = ?, unlimited_quota = ?, expired_at = ?, models = ?,
-            group_name = ?, updated_at = datetime('now')
+            group_name = ?, updated_at = ?
         WHERE id = ?
         "#,
     )
@@ -128,6 +135,7 @@ pub async fn update_token(
     .bind(expired_at)
     .bind(update.models.trim())
     .bind(group_name)
+    .bind(db::now())
     .bind(id)
     .execute(pool)
     .await?;
