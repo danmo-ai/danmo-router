@@ -1,13 +1,12 @@
-# 运维指南
+# 运维手册
 
-本文是 danmo-router **生产与日常运维** 的统一入口：部署拓扑、配置、扩缩容、升级、备份、观测与常见故障处理。实现细节见 [系统架构](architecture.md)；渠道熔断与 429 降权见 [渠道健康与选路](channel-health.md)。
+本文是 danmo-router **部署与日常运维** 的统一入口：自建与**云厂商平台**部署、配置、扩缩容、升级、备份、观测与排障。协议、转发、计费、渠道熔断等设计见 [系统架构](architecture.md)。
 
 ## 文档地图
 
 | 主题 | 文档 |
 |------|------|
-| 协议、方言、计费、数据模型 | [architecture.md](architecture.md) |
-| `CB_*` / `RL_*`、选路与熔断日志 | [channel-health.md](channel-health.md) |
+| 系统设计（协议、方言、计费、渠道健康、`CB_*`/`RL_*`） | [architecture.md](architecture.md) |
 | 与同类项目对比 | [comparison.md](comparison.md) |
 | 合法授权、可接受使用与责任边界 | [compliance.md](compliance.md) |
 | 本地开发与 Makefile | [README.md](../README.md) |
@@ -104,9 +103,96 @@ location / {
 }
 ```
 
+## 云厂商平台部署
+
+按平台给出参考方案：**四层 LB** 承接 `danmo-relay`、**HTTP `/healthz`** 探活、**对象存储 + CDN** 发布 Portal（同源 `/api` 回源 admin/user）。下文「部署共性」适用于各云；其后分厂商列出对应产品名与控制台配置。
+
+### 部署共性
+
+**组件与域名**
+
+| 组件 | 进程/产物 | 典型端口 | 公网域名示例 |
+|------|-----------|----------|--------------|
+| 转发 | `danmo-relay` | 3000 | `api.example.com` |
+| 管理 API | `danmo-admin` | 3001 | 不直连公网，由 Portal 回源 |
+| 用户 API | `danmo-user` | 3002 | 不直连公网，由 Portal 回源 |
+| 管理 Portal | `apps/admin/dist` | — | `admin.example.com` |
+| 用户 Portal | `apps/user/dist` | — | `user.example.com` |
+
+```text
+api.example.com     ──► 云厂商「四层 LB」──► relay ECS/CVM × N :3000
+admin.example.com   ──► CDN ──► OSS/COS（静态）+ 回源 /api ──► admin :3001（内网/VPC）
+user.example.com    ──► CDN ──► OSS/COS（静态）+ 回源 /api ──► user  :3002（内网/VPC）
+```
+
+**实例内进程：** 各计算实例安装 Release 二进制，共享 `/opt/danmo/.env`。relay 节点只跑 relay；admin/user 可同机或分机。SQLite 库宜 **NAS/云盘共享** 或控制写并发（见 [扩缩容与容量](#扩缩容与容量)）。
+
+**LB 探活（与进程内渠道熔断无关）：**
+
+| 字段 | relay | admin | user |
+|------|-------|-------|------|
+| 协议 | HTTP | HTTP | HTTP |
+| 端口 | 3000 | 3001 | 3002 |
+| 路径 | `/healthz` | `/healthz` | `/healthz` |
+
+**Portal 构建：** `npm ci && VITE_COMPLIANCE_URL=… npm run build`（admin/user 各一份）。浏览器请求相对路径 `/api/*` 且带 Cookie，**须** Portal 与 `/api` **同域名**（CDN 路径回源或七层反代）。
+
+**转发面用四层 LB：** Relay 含长连接 SSE/流式；四层 TCP 不分片缓冲 HTTP body。TLS 推荐 **LB TCP:443 → 实例 Nginx:443 → 127.0.0.1:3000**，Nginx 配置见上文 relay 片段。
+
+### 阿里云
+
+| 用途 | 产品 |
+|------|------|
+| relay | ECS（或 ACK 节点） |
+| 转发入口 | **NLB** TCP 443 |
+| Portal | **OSS** + **CDN** / **DCDN** |
+| 证书 | 数字证书管理服务 |
+
+NLB：后端 relay ECS，健康检查 HTTP 端口 **3000** 路径 **`/healthz`**；空闲超时尽量调大。安全组仅允许 NLB 网段访问 3000/443，**禁止** 0.0.0.0/0 访问 3001/3002。Portal：OSS 托管静态，CDN 配置 SPA 回源与 **`/api/*` 路径回源** 至内网 admin/user（或 ALB 七层统一域名）。`api.example.com` CNAME 到 NLB。
+
+### 腾讯云
+
+| 用途 | 产品 |
+|------|------|
+| relay | CVM |
+| 转发入口 | **网络 CLB** TCP:443 |
+| Portal | **COS** + **CDN** |
+
+健康检查 HTTP **3000** `/healthz`。COS+CDN 默认源站 COS，**`/api/` 独立回源** 至 admin/user 内网 CLB 或 CVM；或七层 CLB 上 Nginx 托管静态并 `location /api/` 反代。
+
+### 华为云
+
+**ELB 四层** TCP 443 → relay ECS，HTTP 探活 **3000** `/healthz`。**OBS + CDN**，`/api/*` 多源站回源至 admin/user 私网 ECS 或七层 ELB。
+
+### 火山引擎
+
+**四层 CLB** TCP 443，HTTP `/healthz`:3000。**TOS + CDN**，`/api/` 独立源站；`api.example.com` **勿经 CDN**。
+
+### AWS
+
+**NLB** TCP 443，Target group HTTP `/healthz` on **3000**，Deregistration delay 300–600s。**S3 + CloudFront**：默认行为走 S3 静态；**/api/\*** 第二 Origin 指向 admin/user（CachingDisabled）；`api.example.com` 单独指 NLB。EKS：relay `Service` LoadBalancer + `readinessProbe` `/healthz:3000`。
+
+### Google Cloud / Azure
+
+GCP：**Network LB** TCP 443，HTTP 探活 3000 `/healthz`；Portal 用 Cloud CDN + ALB URL map 分发 `/api/*`。Azure：**Standard Load Balancer** TCP 443 + HTTP probe；Portal 用 **Front Door** / Application Gateway 路由静态与 `/api/*`。
+
+### 平台选型速查
+
+| 平台 | 四层转发 | 静态 Portal | `/api` 回源 |
+|------|----------|-------------|-------------|
+| 阿里云 | NLB | OSS + CDN | CDN 路径回源 / ALB |
+| 腾讯云 | 网络 CLB | COS + CDN | CDN 多源站 / 七层 CLB |
+| 华为云 | ELB TCP | OBS + CDN | CDN → 内网 ECS/ELB |
+| 火山引擎 | CLB 四层 | TOS + CDN | CDN 独立源站 |
+| AWS | NLB | S3 + CloudFront | 第二 Origin |
+| GCP | Network LB | GCS + CDN | ALB URL map |
+| Azure | Load Balancer | Blob + Front Door | Front Door route |
+
+**云平台验收：** 仅四层 LB 公网暴露 relay；探活 `/healthz` 生效；API 域名不经 CDN；Portal 登录 Cookie 正常；`PUBLIC_RELAY_URL` 与 LB 域名一致。
+
 ## 环境变量速查
 
-完整模板见 [`.env.example`](../.env.example)。下表按运维场景分组；`CB_*` / `RL_*` 行为说明见 [channel-health.md#环境变量](channel-health.md#环境变量)。
+完整模板见 [`.env.example`](../.env.example)。下表按运维场景分组；`CB_*` / `RL_*` 语义见 [architecture.md — 渠道健康与选路](architecture.md#渠道健康与选路)。
 
 ### 通用
 
@@ -166,7 +252,7 @@ location / {
 
 **Per-process 限额：** 若前面有 4 个 relay，单账号「全局」并发约为 `4 × RELAY_USER_CONCURRENCY`（各副本独立计数）。需要集群级限流时要在 LB 或外部网关补充策略。
 
-**渠道健康状态** 也在各 relay 进程内存中，副本间短暂不一致属预期；见 [channel-health.md](channel-health.md)。
+**渠道健康状态** 也在各 relay 进程内存中，副本间短暂不一致属预期；见 [architecture.md — 渠道健康与选路](architecture.md#渠道健康与选路)。
 
 ## 健康检查与观测
 
@@ -178,13 +264,13 @@ location / {
 GET /healthz
 ```
 
-响应体为纯文本 `ok`。负载均衡探活建议使用此路径，而非 `/v1/models`（需令牌）。
+响应体为纯文本 `ok`。负载均衡探活建议使用此路径，而非 `/v1/models`（需令牌）。云平台探活参数见 [云厂商平台部署](#云厂商平台部署)。
 
 ### 日志
 
 - 启动：`{service} listening on http://{addr}`
 - 数据库：`applied migration {version}`（升级后首次启动）
-- Relay 渠道健康（`RUST_LOG=info` 可见），详见 [channel-health.md#运维提示](channel-health.md#运维提示)：
+- Relay **进程内渠道健康**（`RUST_LOG=info`，与 LB 探活无关；机制见 [architecture.md — 渠道健康与选路](architecture.md#渠道健康与选路)）：
   - `channel ejected`
   - `probing ejected channel`
   - `channel rate limited`
@@ -246,7 +332,7 @@ cp /path/to/danmo.db /backup/danmo-$(date +%F).db
 |------|----------|------|
 | 401 Invalid API key | 令牌错误、过期、禁用 | 用户中心检查令牌；管理端看用户/令牌状态 |
 | 429 入口 | 超过 `RELAY_*` 并发或 QPS | 客户端降速；或提高单进程限额 / 增加 relay 副本（注意仍为 per-process） |
-| 429 / 5xx 上游 | 渠道限流或故障 | 看 relay 日志与 [渠道健康](channel-health.md)；管理端测试渠道；临时禁用坏渠道 |
+| 429 / 5xx 上游 | 渠道限流或故障 | 看 relay 日志与 [渠道健康](architecture.md#渠道健康与选路)；管理端测试渠道；临时禁用坏渠道 |
 | 401 上游长期存在 | Key 无效 | **不会**自动熔断；需人工禁用或修正渠道 Key |
 | 流式中断 / 客户端超时 | 反代缓冲或超时过短 | Nginx `proxy_buffering off`、加大 `proxy_read_timeout` |
 | `billing_failed` | 上游响应无可用 usage 字段 | 检查模型/方言配置；见 [architecture.md — 用量与计费](architecture.md#用量与计费) |
@@ -279,4 +365,4 @@ make check            # 与 CI 相同检查
 
 ---
 
-变更架构或运维行为时，请同步更新本文、[architecture.md](architecture.md) 与 [channel-health.md](channel-health.md)，并在 [README.md](../README.md) 保留指向本文的链接。
+变更架构或运维行为时，请同步更新本文与 [architecture.md](architecture.md)，并在 [README.md](../README.md) 保留指向本文的链接。

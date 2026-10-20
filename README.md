@@ -2,10 +2,9 @@
 
 多协议 LLM 中转站：Chat、Responses、Messages、Gemini、Embeddings 转发，管理 Portal 和用户 Portal。客户端按模型看到的协议行为与原厂一致；渠道按每个模型配置上游方言。
 
-- 设计：[docs/architecture.md](docs/architecture.md)
-- **运维（部署、配置、升级、备份、排障）：[docs/operations.md](docs/operations.md)**
+- 系统设计（协议、方言、计费、渠道健康）：[docs/architecture.md](docs/architecture.md)
+- **运维手册（自建/云平台部署、配置、升级、备份、排障）：[docs/operations.md](docs/operations.md)**
 - 与 One API、New API、LiteLLM、GPT-Load、Sub2API 等的客观对比：[docs/comparison.md](docs/comparison.md)
-- relay 渠道熔断与 429 降权（`CB_*` / `RL_*`）：[docs/channel-health.md](docs/channel-health.md)
 - **部署前必读** — 合法授权、禁止规避上游协议的中转/转售、责任边界：[docs/compliance.md](docs/compliance.md)
 
 > **合规提示**  
@@ -153,9 +152,9 @@ git tag v0.1.0 && git push origin v0.1.0
 
 ## 环境变量
 
-见 [`.env.example`](.env.example) 与 **[运维指南 — 环境变量速查](docs/operations.md#环境变量速查)**。`PORT` 未设置时各二进制使用上表默认端口。
+见 [`.env.example`](.env.example) 与 **[运维手册 — 环境变量速查](docs/operations.md#环境变量速查)**。`PORT` 未设置时各二进制使用上表默认端口。
 
-`CB_*` / `RL_*` 等 relay 变量见 [渠道健康与选路](docs/channel-health.md#环境变量)。
+`CB_*` / `RL_*` 等 relay 变量见 [系统架构 — 渠道健康与选路](docs/architecture.md#渠道健康与选路)。
 
 ## 调用 API
 
