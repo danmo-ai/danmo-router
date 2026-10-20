@@ -39,7 +39,7 @@ User UI  ──────► danmo-user  × 1..N
 | `POST /v1beta/models/{model}:streamGenerateContent` | Gemini 流式 |
 | `GET /v1/models` | 模型列表 |
 
-完整的方言列表、转发判定、数据模型和计费公式见 [系统架构](docs/architecture.md)。渠道熔断、429 降权及与常见开源中转站的对比见 [渠道健康与选路](docs/channel-health.md)。
+完整的方言列表、转发判定、数据模型和计费公式见 [系统架构](docs/architecture.md)。渠道熔断与 429 降权见 [渠道健康与选路](docs/channel-health.md)；与 One API / New API / LiteLLM 等的客观对比见 [开源中转站渠道可用性对比](docs/open-source-relay-comparison.md)。
 
 ## Makefile
 

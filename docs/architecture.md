@@ -82,7 +82,7 @@ User UI  ──────► danmo-user
 
 选路按分组、模型、优先级和权重。候选必须 `serves(入站协议)`，且 `opaque` 行在协议不同时被排除。每次重试前在进程内应用渠道健康（熔断、429 降权）；上游返回 429 或 5xx 时换下一个渠道，次数由 `RELAY_MAX_RETRIES` 限制。客户端断开后继续读完上游，以便拿到 usage。
 
-渠道健康的配置项、状态机、兜底策略，以及与 One API / New API / LiteLLM 的客观对比见 **[渠道健康与选路](channel-health.md)**。
+渠道健康见 **[渠道健康与选路](channel-health.md)**；与 One API / New API / LiteLLM 等的对比见 **[开源 LLM 中转站：渠道可用性对比](open-source-relay-comparison.md)**。
 
 ## 中间表示
 
