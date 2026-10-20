@@ -9,7 +9,7 @@
 | 系统设计（协议、方言、计费、渠道健康、`CB_*`/`RL_*`） | [architecture.md](architecture.md) |
 | 与同类项目对比 | [comparison.md](comparison.md) |
 | 合法授权、可接受使用与责任边界 | [compliance.md](compliance.md) |
-| Nginx / systemd 示例 | [deploy/`](../deploy/README.md)（`make package` → `dist/deploy/`） |
+| Nginx / systemd 示例 | [deploy/README.md](../deploy/README.md)（`make package` → `dist/deploy/`） |
 | 本地开发与 Makefile | [README.md](../README.md) |
 | 环境变量模板 | [`.env.example`](../.env.example) |
 
@@ -66,7 +66,10 @@ make check   # fmt + clippy + test
 
 ## 生产部署（拆分）
 
-**TLS 建议：** `danmo-relay` 仅提供 **HTTP**（默认 `:3000`）。公网 HTTPS 由 **前置 Nginx** 终结证书，再反代到 `127.0.0.1:3000`（或本机 `:3000`）；大流量与流式场景不要在 relay 进程内做 TLS。可复制仓库 [`deploy/examples/nginx/`](../deploy/examples/nginx/)（`make package` 后在 `dist/deploy/examples/nginx/`），Certbot 说明见 [`deploy/examples/nginx/README.md`](../deploy/examples/nginx/README.md)。
+**TLS 建议：** `danmo-relay` 仅提供 **HTTP**（默认 `:3000`）。公网 HTTPS 由 **前置 Nginx** 终结证书，再反代到 `127.0.0.1:3000`（或本机 `:3000`）；大流量与流式场景不要在 relay 进程内做 TLS。
+
+- **交互安装：** Release 包内 `dist/deploy/scripts/setup-nginx.sh`（需 root）— 引导输入 API/admin/user 域名与 `/opt/danmo` 路径，渲染 Nginx 配置；**不**自动申请证书，证书未就绪时会提示 `certbot` 命令。
+- **手工模板：** [`deploy/examples/nginx/`](../deploy/examples/nginx/)，Certbot 说明见 [`deploy/examples/nginx/README.md`](../deploy/examples/nginx/README.md)。
 
 ```text
 Client ──TLS──► Nginx:443 ──HTTP──► danmo-relay:3000

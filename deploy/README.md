@@ -16,7 +16,9 @@ user.example.com:443  ──► Nginx ──► 静态 Portal + /api ──► h
 
 1. 安装二进制与静态资源（`make package` 产物）到 `/opt/danmo/`。
 2. 复制 [examples/systemd/danmo-relay.service](examples/systemd/danmo-relay.service) 等到 `/etc/systemd/system/`，`systemctl enable --now danmo-relay`。
-3. 安装 Nginx，复制 [examples/nginx/](examples/nginx/) 下配置到 `/etc/nginx/conf.d/` 或 `sites-enabled/`，改 `server_name`、证书路径、`root`。
+3. **Nginx 配置（二选一）**
+   - **交互脚本（推荐首次部署）：** `sudo ./scripts/setup-nginx.sh` — 引导输入域名、安装路径、本机要启用的 relay/admin/user 站点，渲染配置到 `/etc/nginx/conf.d/`。不捆绑 nginx/certbot；可选 apt 安装 nginx。
+   - **手工：** 复制 [examples/nginx/](examples/nginx/) 下配置，自行改 `server_name`、证书路径、`root`。
 4. 证书（二选一）：
    - **Let’s Encrypt（Certbot）**：见 [examples/nginx/README.md](examples/nginx/README.md)。
    - **云证书 / 自签**：把 `ssl_certificate` / `ssl_certificate_key` 指到 PEM 文件。
@@ -29,5 +31,8 @@ user.example.com:443  ──► Nginx ──► 静态 Portal + /api ──► h
 | `examples/nginx/danmo-portal-admin.conf` | 管理 Portal + `/api` → admin |
 | `examples/nginx/danmo-portal-user.conf` | 用户 Portal + `/api` → user |
 | `examples/systemd/danmo-*.service` | systemd 单元模板 |
+| `scripts/setup-nginx.sh` | 交互式 Nginx 配置向导 |
+
+**说明：** 脚本适合 **单机/自管 VM**；云上若 Portal 走 OSS/CDN、API 走 NLB，通常只需在 relay 节点跑脚本中的 relay 部分，或继续手工改示例。
 
 详细说明见 [docs/operations.md](../docs/operations.md)。
