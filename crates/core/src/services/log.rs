@@ -1,4 +1,4 @@
-use crate::db::DbPool;
+use crate::db::{self, DbPool};
 use crate::error::AppResult;
 use crate::models::{LogEntry, OverviewStats};
 use crate::usage::Usage;
@@ -65,36 +65,57 @@ impl NewLog {
     }
 }
 
-pub async fn insert_log(pool: &DbPool, entry: NewLog) -> AppResult<LogEntry> {
-    let result = sqlx::query(
+/// Column widths of `logs.error` / `logs.raw_usage` in the MySQL schema.
+const MAX_ERROR_CHARS: usize = 2000;
+const MAX_RAW_USAGE_CHARS: usize = 8000;
+
+pub async fn insert_log(pool: &DbPool, mut entry: NewLog) -> AppResult<LogEntry> {
+    if let Some(error) = &mut entry.error {
+        if let Some((cut, _)) = error.char_indices().nth(MAX_ERROR_CHARS) {
+            error.truncate(cut);
+        }
+    }
+    // A cut JSON document is unreadable, so an oversized one is dropped instead.
+    if entry
+        .raw_usage
+        .as_ref()
+        .is_some_and(|raw| raw.chars().count() > MAX_RAW_USAGE_CHARS)
+    {
+        entry.raw_usage = None;
+    }
+    let engine = db::engine(pool);
+    let sql = format!(
         r#"
         INSERT INTO logs
             (user_id, token_id, channel_id, model, prompt_tokens, completion_tokens,
              quota, duration_ms, status, estimated, error,
-             cache_read_tokens, cache_write_tokens, reasoning_tokens, usage_adapter, raw_usage)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
+             cache_read_tokens, cache_write_tokens, reasoning_tokens, usage_adapter, raw_usage,
+             created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?){}
         "#,
-    )
-    .bind(entry.user_id)
-    .bind(entry.token_id)
-    .bind(entry.channel_id)
-    .bind(&entry.model)
-    .bind(entry.prompt_tokens)
-    .bind(entry.completion_tokens)
-    .bind(entry.quota)
-    .bind(entry.duration_ms)
-    .bind(&entry.status)
-    .bind(&entry.error)
-    .bind(entry.cache_read_tokens)
-    .bind(entry.cache_write_tokens)
-    .bind(entry.reasoning_tokens)
-    .bind(&entry.usage_adapter)
-    .bind(&entry.raw_usage)
-    .execute(pool)
-    .await?;
+        engine.returning_id()
+    );
+    let query = sqlx::query(&sql)
+        .bind(entry.user_id)
+        .bind(entry.token_id)
+        .bind(entry.channel_id)
+        .bind(&entry.model)
+        .bind(entry.prompt_tokens)
+        .bind(entry.completion_tokens)
+        .bind(entry.quota)
+        .bind(entry.duration_ms)
+        .bind(&entry.status)
+        .bind(&entry.error)
+        .bind(entry.cache_read_tokens)
+        .bind(entry.cache_write_tokens)
+        .bind(entry.reasoning_tokens)
+        .bind(&entry.usage_adapter)
+        .bind(&entry.raw_usage)
+        .bind(db::now());
+    let id = db::insert_id(engine, query, pool).await?;
 
     Ok(sqlx::query_as("SELECT * FROM logs WHERE id = ?")
-        .bind(result.last_insert_rowid())
+        .bind(id)
         .fetch_one(pool)
         .await?)
 }
@@ -106,7 +127,7 @@ pub async fn list_logs(pool: &DbPool, query: &LogQuery) -> AppResult<Vec<LogEntr
         query.limit.min(200)
     };
     let offset = query.offset.max(0);
-    let mut qb: QueryBuilder<sqlx::Sqlite> = QueryBuilder::new("SELECT * FROM logs WHERE 1 = 1");
+    let mut qb: QueryBuilder<sqlx::Any> = QueryBuilder::new("SELECT * FROM logs WHERE 1 = 1");
     if let Some(uid) = query.user_id {
         qb.push(" AND user_id = ").push_bind(uid);
     }
@@ -142,27 +163,32 @@ pub async fn overview(pool: &DbPool) -> AppResult<OverviewStats> {
         sqlx::query_as("SELECT COUNT(*) FROM logs WHERE status = 'success'")
             .fetch_one(pool)
             .await?;
-    let total_quota: (i64,) = sqlx::query_as("SELECT COALESCE(SUM(quota), 0) FROM logs")
-        .fetch_one(pool)
-        .await?;
+    // MySQL `SUM` is DECIMAL, which the Any driver cannot decode.
+    let total_quota: (i64,) =
+        sqlx::query_as("SELECT CAST(COALESCE(SUM(quota), 0) AS SIGNED) FROM logs")
+            .fetch_one(pool)
+            .await?;
     let total_users: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
         .fetch_one(pool)
         .await?;
     let total_channels: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM channels")
         .fetch_one(pool)
         .await?;
-    let today_requests: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM logs WHERE created_at >= date('now')")
-            .fetch_one(pool)
-            .await?;
+    let today = db::today();
+    let today_requests: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM logs WHERE created_at >= ?")
+        .bind(&today)
+        .fetch_one(pool)
+        .await?;
     let failed_requests: (i64,) =
         sqlx::query_as("SELECT COUNT(*) FROM logs WHERE status != 'success'")
             .fetch_one(pool)
             .await?;
-    let today_quota: (i64,) =
-        sqlx::query_as("SELECT COALESCE(SUM(quota), 0) FROM logs WHERE created_at >= date('now')")
-            .fetch_one(pool)
-            .await?;
+    let today_quota: (i64,) = sqlx::query_as(
+        "SELECT CAST(COALESCE(SUM(quota), 0) AS SIGNED) FROM logs WHERE created_at >= ?",
+    )
+    .bind(&today)
+    .fetch_one(pool)
+    .await?;
 
     Ok(OverviewStats {
         total_requests: total_requests.0,

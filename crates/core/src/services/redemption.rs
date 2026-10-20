@@ -1,4 +1,4 @@
-use crate::db::{self, DbPool};
+use crate::db::{self, DbPool, DbTx, SqlEngine};
 use crate::error::{AppError, AppResult};
 use crate::models::{Redemption, User};
 use rand::rngs::OsRng;
@@ -19,10 +19,11 @@ pub async fn create_batch(
         ));
     }
     let name = name.trim();
+    let engine = db::engine(pool);
     let mut tx = db::begin_write(pool).await?;
     let mut created = Vec::with_capacity(count as usize);
     for _ in 0..count {
-        let id = insert_one(&mut tx, name, quota).await?;
+        let id = insert_one(&mut tx, engine, name, quota).await?;
         let row: Redemption = sqlx::query_as("SELECT * FROM redemptions WHERE id = ?")
             .bind(id)
             .fetch_one(&mut *tx)
@@ -34,23 +35,25 @@ pub async fn create_batch(
 }
 
 async fn insert_one(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    tx: &mut DbTx,
+    engine: &dyn SqlEngine,
     name: &str,
     quota: i64,
 ) -> AppResult<i64> {
+    let sql = format!(
+        "INSERT INTO redemptions (name, code, quota, status, created_at) VALUES (?, ?, ?, 'unused', ?){}",
+        engine.returning_id()
+    );
     for _ in 0..5 {
         let code = generate_code();
-        let result = sqlx::query(
-            "INSERT INTO redemptions (name, code, quota, status) VALUES (?, ?, ?, 'unused')",
-        )
-        .bind(name)
-        .bind(&code)
-        .bind(quota)
-        .execute(&mut **tx)
-        .await;
-        match result {
-            Ok(r) => return Ok(r.last_insert_rowid()),
-            Err(sqlx::Error::Database(e)) if e.message().contains("UNIQUE") => continue,
+        let query = sqlx::query(&sql)
+            .bind(name)
+            .bind(&code)
+            .bind(quota)
+            .bind(db::now());
+        match db::insert_id(engine, query, &mut **tx).await {
+            Ok(id) => return Ok(id),
+            Err(sqlx::Error::Database(e)) if e.is_unique_violation() => continue,
             Err(e) => return Err(e.into()),
         }
     }
@@ -92,15 +95,17 @@ pub async fn redeem(pool: &DbPool, user_id: i64, code: &str) -> AppResult<User> 
     if code.is_empty() {
         return Err(AppError::BadRequest("code is required".into()));
     }
+    let now = db::now();
     let mut tx = db::begin_write(pool).await?;
     let updated = sqlx::query(
         r#"
         UPDATE redemptions
-        SET status = 'used', redeemed_by = ?, redeemed_at = datetime('now')
+        SET status = 'used', redeemed_by = ?, redeemed_at = ?
         WHERE code = ? AND status = 'unused'
         "#,
     )
     .bind(user_id)
+    .bind(&now)
     .bind(code)
     .execute(&mut *tx)
     .await?;
@@ -119,8 +124,9 @@ pub async fn redeem(pool: &DbPool, user_id: i64, code: &str) -> AppResult<User> 
         .bind(code)
         .fetch_one(&mut *tx)
         .await?;
-    sqlx::query("UPDATE users SET quota = quota + ?, updated_at = datetime('now') WHERE id = ?")
+    sqlx::query("UPDATE users SET quota = quota + ?, updated_at = ? WHERE id = ?")
         .bind(quota)
+        .bind(&now)
         .bind(user_id)
         .execute(&mut *tx)
         .await?;

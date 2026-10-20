@@ -1,4 +1,4 @@
-use crate::db::DbPool;
+use crate::db::{self, DbPool};
 use crate::error::{AppError, AppResult};
 use crate::models::{Session, User};
 use chrono::{Duration, Utc};
@@ -7,17 +7,19 @@ use uuid::Uuid;
 pub async fn create_session(pool: &DbPool, user_id: i64, ttl_hours: i64) -> AppResult<Session> {
     let id = Uuid::new_v4().to_string();
     let expires_at = (Utc::now() + Duration::hours(ttl_hours)).to_rfc3339();
-    sqlx::query("INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, ?)")
+    let created_at = db::now();
+    sqlx::query("INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)")
         .bind(&id)
         .bind(user_id)
         .bind(&expires_at)
+        .bind(&created_at)
         .execute(pool)
         .await?;
     Ok(Session {
         id,
         user_id,
         expires_at,
-        created_at: Utc::now().to_rfc3339(),
+        created_at,
     })
 }
 

@@ -5,13 +5,14 @@
 
 use crate::billing::{self, ModelPriceInput};
 use crate::crypto;
-use crate::db::DbPool;
+use crate::db::{self, DbPool};
 use crate::error::{AppError, AppResult};
 use crate::models::{Channel, User};
 use crate::services::channel::{self, ChannelInput, ChannelModelInput};
 use crate::services::log::{self, NewLog};
 use crate::services::redemption;
 use crate::services::user;
+use chrono::Duration;
 use tracing::info;
 
 const DEMO_USER: &str = "demo";
@@ -326,23 +327,28 @@ async fn insert_token(
 ) -> AppResult<i64> {
     let key_hash = crypto::hash_token_key(raw_key);
     let key_prefix: String = raw_key.chars().take(10).collect();
-    let result = sqlx::query(
+    let now = db::now();
+    let engine = db::engine(pool);
+    let sql = format!(
         r#"
         INSERT INTO tokens
-            (user_id, name, key_hash, key_prefix, status, remain_quota, unlimited_quota, models)
-        VALUES (?, ?, ?, ?, ?, ?, ?, '')
+            (user_id, name, key_hash, key_prefix, status, remain_quota, unlimited_quota, models,
+             created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?){}
         "#,
-    )
-    .bind(user_id)
-    .bind(name)
-    .bind(&key_hash)
-    .bind(&key_prefix)
-    .bind(status)
-    .bind(remain_quota)
-    .bind(i64::from(unlimited))
-    .execute(pool)
-    .await?;
-    Ok(result.last_insert_rowid())
+        engine.returning_id()
+    );
+    let query = sqlx::query(&sql)
+        .bind(user_id)
+        .bind(name)
+        .bind(&key_hash)
+        .bind(&key_prefix)
+        .bind(status)
+        .bind(remain_quota)
+        .bind(i64::from(unlimited))
+        .bind(&now)
+        .bind(&now);
+    Ok(db::insert_id(engine, query, pool).await?)
 }
 
 async fn seed_logs(
@@ -364,7 +370,7 @@ async fn seed_logs(
             42,
             640,
             "openai_chat",
-            "-15 minutes",
+            15,
         ),
         DemoLog::ok(
             demo.id,
@@ -376,7 +382,7 @@ async fn seed_logs(
             196,
             1820,
             "deepseek_chat",
-            "-70 minutes",
+            70,
         )
         .cached(2400, 180, 260),
         DemoLog::ok(
@@ -389,7 +395,7 @@ async fn seed_logs(
             1540,
             2400,
             "anthropic_messages",
-            "-3 hours",
+            180,
         ),
         DemoLog::fail(
             demo.id,
@@ -399,7 +405,7 @@ async fn seed_logs(
             "billing_failed",
             "upstream usage missing",
             410,
-            "-5 hours",
+            300,
         ),
         DemoLog::fail(
             demo.id,
@@ -409,7 +415,7 @@ async fn seed_logs(
             "error",
             "upstream 502",
             1200,
-            "-8 hours",
+            480,
         ),
         DemoLog::ok(
             alice_id,
@@ -421,7 +427,7 @@ async fn seed_logs(
             510,
             980,
             "openai_chat",
-            "-1 day",
+            1440,
         )
         .anonymous(),
         DemoLog::ok(
@@ -434,16 +440,16 @@ async fn seed_logs(
             6,
             90,
             "embeddings",
-            "-2 days",
+            2880,
         )
         .anonymous(),
     ];
 
     for row in rows {
-        let (entry, when) = row.into_entry();
+        let (entry, minutes_ago) = row.into_entry();
         let saved = log::insert_log(pool, entry).await?;
-        sqlx::query("UPDATE logs SET created_at = datetime('now', ?) WHERE id = ?")
-            .bind(when)
+        sqlx::query("UPDATE logs SET created_at = ? WHERE id = ?")
+            .bind(db::time_ago(Duration::minutes(minutes_ago)))
             .bind(saved.id)
             .execute(pool)
             .await?;
@@ -466,7 +472,7 @@ struct DemoLog {
     status: &'static str,
     error: Option<&'static str>,
     adapter: &'static str,
-    when: &'static str,
+    minutes_ago: i64,
 }
 
 impl DemoLog {
@@ -481,7 +487,7 @@ impl DemoLog {
         quota: i64,
         duration_ms: i64,
         adapter: &'static str,
-        when: &'static str,
+        minutes_ago: i64,
     ) -> Self {
         Self {
             user_id,
@@ -498,7 +504,7 @@ impl DemoLog {
             status: "success",
             error: None,
             adapter,
-            when,
+            minutes_ago,
         }
     }
 
@@ -511,7 +517,7 @@ impl DemoLog {
         status: &'static str,
         error: &'static str,
         duration_ms: i64,
-        when: &'static str,
+        minutes_ago: i64,
     ) -> Self {
         Self {
             user_id,
@@ -528,7 +534,7 @@ impl DemoLog {
             status,
             error: Some(error),
             adapter: "",
-            when,
+            minutes_ago,
         }
     }
 
@@ -544,7 +550,7 @@ impl DemoLog {
         self
     }
 
-    fn into_entry(self) -> (NewLog, &'static str) {
+    fn into_entry(self) -> (NewLog, i64) {
         let mut entry = NewLog::new(self.user_id, self.token_id, self.model);
         entry.channel_id = Some(self.channel_id);
         entry.prompt_tokens = self.prompt;
@@ -557,6 +563,6 @@ impl DemoLog {
         entry.status = self.status.into();
         entry.error = self.error.map(str::to_string);
         entry.usage_adapter = self.adapter.into();
-        (entry, self.when)
+        (entry, self.minutes_ago)
     }
 }

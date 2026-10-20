@@ -2,19 +2,18 @@ use danmo_core::config::Config;
 use danmo_core::db::connect;
 use danmo_core::services::{log as log_svc, redemption, user as user_svc};
 use danmo_core::AppError;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use std::str::FromStr;
-use std::time::Duration;
+use sqlx::any::AnyPoolOptions;
 
-async fn setup() -> (danmo_core::DbPool, tempfile::TempDir) {
-    let dir = tempfile::tempdir().unwrap();
-    let db_path = dir.path().join("test.db");
+mod common;
+
+async fn setup() -> (danmo_core::DbPool, common::TestDb) {
+    let db = common::test_db().await;
     let mut config = Config::from_env().unwrap();
-    config.database_url = format!("sqlite://{}?mode=rwc", db_path.display());
+    config.database_url = db.url.clone();
     config.seed_demo = false;
     config.admin_username = format!("admin-{}", std::process::id());
     let pool = connect(&config).await.unwrap();
-    (pool, dir)
+    (pool, db)
 }
 
 #[tokio::test]
@@ -106,23 +105,68 @@ async fn logs_filter_by_model_and_status() {
     assert_eq!(errors[0].model, "gpt-4o-mini");
 }
 
+/// relay / admin / user start together against one empty database.
 #[tokio::test]
-async fn held_write_lock_reports_busy() {
-    let (pool, dir) = setup().await;
-    let _held = danmo_core::db::begin_write(&pool).await.unwrap();
+async fn concurrent_boots_apply_each_migration_once() {
+    let db = common::test_db().await;
+    let mut config = Config::from_env().unwrap();
+    config.database_url = db.url.clone();
+    config.seed_demo = false;
+    let (a, b, c) = tokio::join!(connect(&config), connect(&config), connect(&config));
+    let pool = a.unwrap();
+    b.unwrap();
+    c.unwrap();
 
-    let options = SqliteConnectOptions::from_str(&format!(
-        "sqlite://{}",
-        dir.path().join("test.db").display()
-    ))
-    .unwrap()
-    .busy_timeout(Duration::ZERO);
-    let other = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(options)
+    let versions: Vec<(i64,)> =
+        sqlx::query_as("SELECT version FROM schema_migrations ORDER BY version")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    let expected = danmo_core::db::engine(&pool).migrations().len() as i64;
+    assert_eq!(versions, (1..=expected).map(|v| (v,)).collect::<Vec<_>>());
+    let admins: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users WHERE username = ?")
+        .bind(&config.admin_username)
+        .fetch_one(&pool)
         .await
         .unwrap();
-    let err = danmo_core::db::begin_write(&other).await.unwrap_err();
+    assert_eq!(admins.0, 1);
+}
+
+/// SQLite: a second `BEGIN IMMEDIATE` cannot take the write lock. MySQL: a second
+/// `SELECT ... FOR UPDATE` on the same row times out waiting for its row lock.
+#[tokio::test]
+async fn held_write_lock_reports_busy() {
+    let (pool, db) = setup().await;
+    let lock = danmo_core::db::engine(&pool).lock_rows();
+    let row = format!("SELECT id FROM users ORDER BY id LIMIT 1{lock}");
+    let mut held = danmo_core::db::begin_write(&pool).await.unwrap();
+    sqlx::query(&row).fetch_one(&mut *held).await.unwrap();
+
+    let impatient = if db.is_mysql() {
+        "SET SESSION innodb_lock_wait_timeout = 1"
+    } else {
+        "PRAGMA busy_timeout = 0"
+    };
+    let other = AnyPoolOptions::new()
+        .max_connections(1)
+        .after_connect(move |conn, _| {
+            Box::pin(async move {
+                sqlx::query(impatient).execute(conn).await?;
+                Ok(())
+            })
+        })
+        .connect(&db.url)
+        .await
+        .unwrap();
+    let err = match danmo_core::db::begin_write(&other).await {
+        Err(e) => e,
+        Ok(mut tx) => sqlx::query(&row)
+            .fetch_one(&mut *tx)
+            .await
+            .map(|_| ())
+            .map_err(AppError::from)
+            .unwrap_err(),
+    };
     assert!(err.is_db_busy(), "{err}");
     assert!(!AppError::Conflict("x".into()).is_db_busy());
 }
