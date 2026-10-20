@@ -50,6 +50,37 @@ jobs:
             target/release/danmo-router
           if-no-files-found: error
 
+  mysql:
+    name: Core tests on MySQL
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: danmo
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -pdanmo"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DANMO_TEST_MYSQL_URL: mysql://root:danmo@127.0.0.1:3306
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+
+      - name: Test danmo-core
+        run: cargo test -p danmo-core
+
   portals:
     name: Portals (admin / user)
     runs-on: ubuntu-latest
