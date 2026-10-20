@@ -14,6 +14,8 @@ pub struct Config {
     pub relay_max_retries: u32,
     pub session_ttl_hours: i64,
     pub cors_origins: Vec<String>,
+    /// Relay base shown in the user portal. Empty means the local default.
+    pub public_relay_url: String,
 }
 
 impl Config {
@@ -69,6 +71,7 @@ impl Config {
                 .parse()
                 .context("invalid SESSION_TTL_HOURS")?,
             cors_origins,
+            public_relay_url: env::var("PUBLIC_RELAY_URL").unwrap_or_default(),
         })
     }
 }
