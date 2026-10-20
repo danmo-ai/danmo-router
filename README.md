@@ -4,6 +4,7 @@
 
 - 系统设计（协议、方言、计费、渠道健康）：[docs/architecture.md](docs/architecture.md)
 - **运维手册（自建/云平台部署、配置、升级、备份、排障）：[docs/operations.md](docs/operations.md)**
+- 贡献 / Agent 规则（迁移按引擎、install/upgrade）：[AGENTS.md](AGENTS.md)
 - 与 One API、New API、LiteLLM、GPT-Load、Sub2API 等的客观对比：[docs/comparison.md](docs/comparison.md)
 - **部署前必读** — 合法授权、禁止规避上游协议的中转/转售、责任边界：[docs/compliance.md](docs/compliance.md)
 
