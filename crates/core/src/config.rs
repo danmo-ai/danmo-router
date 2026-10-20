@@ -14,6 +14,8 @@ pub struct Config {
     pub relay_max_retries: u32,
     pub session_ttl_hours: i64,
     pub cors_origins: Vec<String>,
+    /// When set, `connect` fills an empty database with sample channels, users, and logs.
+    pub seed_demo: bool,
 }
 
 impl Config {
@@ -69,8 +71,16 @@ impl Config {
                 .parse()
                 .context("invalid SESSION_TTL_HOURS")?,
             cors_origins,
+            seed_demo: env_flag("SEED_DEMO"),
         })
     }
+}
+
+fn env_flag(name: &str) -> bool {
+    matches!(
+        env::var(name).ok().as_deref().map(str::trim),
+        Some("1" | "true" | "yes" | "on")
+    )
 }
 
 fn parse_encryption_key(hex_key: &str) -> Result<[u8; 32]> {

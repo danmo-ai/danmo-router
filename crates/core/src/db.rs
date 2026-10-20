@@ -37,6 +37,9 @@ pub async fn connect(config: &Config) -> AppResult<DbPool> {
     migrate(&pool).await?;
     seed_admin(&pool, config).await?;
     seed_defaults(&pool).await?;
+    if config.seed_demo {
+        crate::demo::seed_demo(&pool, &config.encryption_key).await?;
+    }
     Ok(pool)
 }
 
