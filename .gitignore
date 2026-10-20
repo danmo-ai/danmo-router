@@ -8,6 +8,8 @@ target
 data/
 *.db
 dist/
+certs/*
+!certs/.gitkeep
 
 # Node / frontend
 node_modules/

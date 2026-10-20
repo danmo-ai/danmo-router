@@ -1,26 +1,17 @@
-# 按角色划分的发布包
+# 角色与 Compose profiles
 
-`make package` 在 `dist/packages/` 下生成 **三个可独立部署单元**（仍共享同一 `DATABASE_URL` / `ENCRYPTION_KEY` 时才能协同工作）：
+生产不再提供「解压二进制到 `/opt/danmo-*`」分包。按角色选择 **镜像** 与 Compose **profiles**：
 
-| 目录 | 内容 | 典型安装路径 |
-|------|------|----------------|
-| `danmo-relay/` | `bin/danmo-relay` | `/opt/danmo-relay` |
-| `danmo-admin-portal/` | `bin/danmo-admin` + `apps/admin/` 静态 | `/opt/danmo-admin` |
-| `danmo-user-portal/` | `bin/danmo-user` + `apps/user/` 静态 | `/opt/danmo-user` |
-
-**用户面 = API + Portal 同一包**：`danmo-user-portal` 内含 `danmo-user` 与用户中心静态页，装在一台机用 Nginx 提供 HTTPS + `/api` 反代即可，无需再从别处找 Portal 资产。
-
-**管理面同理：** `danmo-admin-portal`。
-
-完整单机安装仍可用 **`dist/` 根目录**（含三个二进制、`apps/`、`deploy/`、`.env.example`），等价于一次装齐。
-
-共享配置：各包需同一份 `.env`（或相同 `DATABASE_URL` 与 `ENCRYPTION_KEY`）。从 `dist/.env.example` 复制。
-
-Nginx / systemd 与脚本在 **`dist/deploy/`**（或仓库 `deploy/`）：
+| Profile / 角色 | 启动的服务 | 镜像 |
+|----------------|------------|------|
+| `all`（默认） | relay + admin + user + edge | 四镜像 |
+| `relay` | relay + edge | `danmo-relay`, `danmo-edge` |
+| `admin` | admin + edge | `danmo-admin`, `danmo-edge` |
+| `user` | user + edge | `danmo-user`, `danmo-edge` |
 
 ```bash
-sudo ./deploy/scripts/install.sh --role=user --prefix=/opt/danmo-user
-sudo ./deploy/scripts/upgrade.sh --from-dir=/path/to/new-release --role=user --prefix=/opt/danmo-user
+./deploy/scripts/install.sh --role=user
+# 等价：COMPOSE_PROFILES=user docker compose up -d
 ```
 
-`--role=admin` / `relay` / `all` 同理。共享 `.env` 中的 `DATABASE_URL`（sqlite 现用；mysql 即将支持）与 `ENCRYPTION_KEY`。
+多机拆分时各机使用不同 `--role=`，仍须共享同一 `DATABASE_URL`（持久卷 / 网络库）与 `ENCRYPTION_KEY`。edge 在每台需要公网域名的机器上运行；Portal 静态已打进 `danmo-edge`，无需单独 portal 包。

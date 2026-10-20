@@ -3,10 +3,10 @@ SHELL := /bin/bash
 
 CARGO ?= cargo
 NPM ?= npm
-RELEASE_DIR := target/release
-DIST_DIR := dist
-PKG_DIR := $(DIST_DIR)/packages
+DOCKER ?= docker
 PORTALS := admin user
+IMAGE_PREFIX ?= ghcr.io/danmo-ai
+DANMO_TAG ?= local
 
 RELAY_PORT ?= 3000
 ADMIN_PORT ?= 3001
@@ -15,7 +15,7 @@ USER_PORT ?= 3002
 .PHONY: help check fmt fmt-check clippy test build release \
 	run-relay run-admin run-user run-admin-api run-user-api run-all-in-one \
 	portals-install portals-build portals-dev-admin portals-dev-user \
-	package clean
+	docker-build compose-up compose-down compose-config clean
 
 help: ## Show targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | \
@@ -40,10 +40,10 @@ check: fmt-check clippy test ## CI: fmt + clippy + test
 build: ## Debug binaries
 	$(CARGO) build -p danmo-server --bins
 
-release: ## Release binaries
+release: ## Release binaries (local cargo; production uses Docker images)
 	$(CARGO) build -p danmo-server --bins --release
 
-## Local run
+## Local run (cargo / Vite — not Compose)
 run-relay: ## Relay :3000
 	PORT=$(RELAY_PORT) $(CARGO) run -p danmo-server --bin danmo-relay
 
@@ -75,26 +75,23 @@ portals-dev-admin: ## Admin Portal only :5173
 portals-dev-user: ## User Portal only :5174
 	cd apps/user && $(NPM) run dev
 
-## Dist
-package: release portals-build ## dist/ + dist/packages/{relay,admin-portal,user-portal}
-	rm -rf $(DIST_DIR)
-	mkdir -p $(DIST_DIR)/bin $(DIST_DIR)/apps/admin $(DIST_DIR)/apps/user \
-		$(PKG_DIR)/danmo-relay/bin \
-		$(PKG_DIR)/danmo-admin-portal/bin $(PKG_DIR)/danmo-admin-portal/apps/admin \
-		$(PKG_DIR)/danmo-user-portal/bin $(PKG_DIR)/danmo-user-portal/apps/user
-	cp $(RELEASE_DIR)/danmo-relay $(RELEASE_DIR)/danmo-admin $(RELEASE_DIR)/danmo-user $(DIST_DIR)/bin/
-	cp $(RELEASE_DIR)/danmo-relay $(PKG_DIR)/danmo-relay/bin/
-	cp $(RELEASE_DIR)/danmo-admin $(PKG_DIR)/danmo-admin-portal/bin/
-	cp $(RELEASE_DIR)/danmo-user $(PKG_DIR)/danmo-user-portal/bin/
-	cp -R apps/admin/dist/. $(DIST_DIR)/apps/admin/
-	cp -R apps/user/dist/. $(DIST_DIR)/apps/user/
-	cp -R apps/admin/dist/. $(PKG_DIR)/danmo-admin-portal/apps/admin/
-	cp -R apps/user/dist/. $(PKG_DIR)/danmo-user-portal/apps/user/
-	cp .env.example $(DIST_DIR)/
-	cp -R deploy/. $(DIST_DIR)/deploy/
-	cp deploy/packages/README.md $(PKG_DIR)/README.md
-	@echo "Artifacts: $(DIST_DIR)/ and $(PKG_DIR)/"
+## Docker / Compose
+docker-build: ## Build local images (relay/admin/user/edge)
+	$(DOCKER) build --target relay -t $(IMAGE_PREFIX)/danmo-relay:$(DANMO_TAG) .
+	$(DOCKER) build --target admin -t $(IMAGE_PREFIX)/danmo-admin:$(DANMO_TAG) .
+	$(DOCKER) build --target user  -t $(IMAGE_PREFIX)/danmo-user:$(DANMO_TAG) .
+	$(DOCKER) build --target edge  -t $(IMAGE_PREFIX)/danmo-edge:$(DANMO_TAG) .
 
-clean: ## Clean Rust + portal + dist
+compose-config: ## Validate compose.yml
+	COMPOSE_PROFILES=$${COMPOSE_PROFILES:-all} $(DOCKER) compose config >/dev/null
+
+compose-up: ## Full stack via Compose (profile all)
+	@test -f .env || cp .env.example .env
+	COMPOSE_PROFILES=$${COMPOSE_PROFILES:-all} $(DOCKER) compose up -d --build
+
+compose-down: ## Stop Compose stack
+	COMPOSE_PROFILES=$${COMPOSE_PROFILES:-all} $(DOCKER) compose down
+
+clean: ## Clean Rust + portal outputs
 	$(CARGO) clean
-	rm -rf apps/admin/dist apps/user/dist $(DIST_DIR)
+	rm -rf apps/admin/dist apps/user/dist

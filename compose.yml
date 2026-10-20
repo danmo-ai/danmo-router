@@ -1,0 +1,133 @@
+# danmo-router — Docker Compose (edge Nginx + relay/admin/user).
+# Backends share the edge container network namespace and listen on loopback
+# from Nginx's point of view (127.0.0.1). Only edge publishes host ports.
+#
+# Full stack (COMPOSE_PROFILES=all is the default in .env.example):
+#   cp .env.example .env && docker compose up -d --build
+#
+# Role profiles:
+#   COMPOSE_PROFILES=relay docker compose up -d
+#   COMPOSE_PROFILES=admin,user docker compose up -d
+#
+# Serverless / separate tasks should use service DNS (relay:3000 etc.) instead
+# of network_mode; override RELAY_UPSTREAM / ADMIN_UPSTREAM / USER_UPSTREAM.
+
+name: danmo
+
+x-app-env: &app-env
+  HOST: "0.0.0.0"
+  # Always use the Compose volume path inside containers (do not inherit host-relative sqlite://data/...).
+  DATABASE_URL: sqlite:///data/danmo.db?mode=rwc
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+  ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+  ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+  DEFAULT_USER_QUOTA: ${DEFAULT_USER_QUOTA:-500000}
+  RELAY_MAX_RETRIES: ${RELAY_MAX_RETRIES:-2}
+  RELAY_USER_CONCURRENCY: ${RELAY_USER_CONCURRENCY:-4}
+  RELAY_INSTANCE_CONCURRENCY: ${RELAY_INSTANCE_CONCURRENCY:-32}
+  RELAY_USER_QPS: ${RELAY_USER_QPS:-5}
+  RELAY_INSTANCE_QPS: ${RELAY_INSTANCE_QPS:-50}
+  RELAY_LEGACY_CONCURRENCY: ${RELAY_LEGACY_CONCURRENCY:-4}
+  RELAY_LEGACY_QPS: ${RELAY_LEGACY_QPS:-10}
+  CB_ENABLED: ${CB_ENABLED:-true}
+  CB_FAILURE_THRESHOLD: ${CB_FAILURE_THRESHOLD:-5}
+  CB_BASE_EJECT_SECS: ${CB_BASE_EJECT_SECS:-30}
+  CB_MAX_EJECT_SECS: ${CB_MAX_EJECT_SECS:-600}
+  RL_WEIGHT_FLOOR: ${RL_WEIGHT_FLOOR:-0.05}
+  RL_RECOVER_SECS: ${RL_RECOVER_SECS:-60}
+  SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-168}
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://admin.localhost,http://user.localhost}
+  PUBLIC_RELAY_URL: ${PUBLIC_RELAY_URL:-http://api.localhost/v1}
+  RUST_LOG: ${RUST_LOG:-info}
+  SEED_DEMO: ${SEED_DEMO:-0}
+
+services:
+  edge:
+    profiles: ["relay", "admin", "user", "all"]
+    image: ${DANMO_IMAGE_EDGE:-ghcr.io/danmo-ai/danmo-edge:${DANMO_TAG:-latest}}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: edge
+      args:
+        VITE_COMPLIANCE_URL: ${VITE_COMPLIANCE_URL:-}
+    restart: unless-stopped
+    environment:
+      API_DOMAIN: ${API_DOMAIN:-api.localhost}
+      ADMIN_DOMAIN: ${ADMIN_DOMAIN:-admin.localhost}
+      USER_DOMAIN: ${USER_DOMAIN:-user.localhost}
+      # Backends share this network namespace (see network_mode on API services).
+      RELAY_UPSTREAM: 127.0.0.1:3000
+      ADMIN_UPSTREAM: 127.0.0.1:3001
+      USER_UPSTREAM: 127.0.0.1:3002
+      ENABLE_TLS: ${ENABLE_TLS:-0}
+      SSL_CERT: ${SSL_CERT:-/etc/nginx/certs/fullchain.pem}
+      SSL_KEY: ${SSL_KEY:-/etc/nginx/certs/privkey.pem}
+    ports:
+      - "${EDGE_HTTP_PORT:-80}:80"
+      - "${EDGE_HTTPS_PORT:-443}:443"
+    volumes:
+      - ${DANMO_CERTS_DIR:-./certs}:/etc/nginx/certs:ro
+
+  relay:
+    profiles: ["relay", "all"]
+    image: ${DANMO_IMAGE_RELAY:-ghcr.io/danmo-ai/danmo-relay:${DANMO_TAG:-latest}}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: relay
+    restart: unless-stopped
+    network_mode: "service:edge"
+    depends_on:
+      - edge
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *app-env
+      PORT: "3000"
+    volumes:
+      - danmo-data:/data
+
+  admin:
+    profiles: ["admin", "all"]
+    image: ${DANMO_IMAGE_ADMIN:-ghcr.io/danmo-ai/danmo-admin:${DANMO_TAG:-latest}}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: admin
+    restart: unless-stopped
+    network_mode: "service:edge"
+    depends_on:
+      - edge
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *app-env
+      PORT: "3001"
+    volumes:
+      - danmo-data:/data
+
+  user:
+    profiles: ["user", "all"]
+    image: ${DANMO_IMAGE_USER:-ghcr.io/danmo-ai/danmo-user:${DANMO_TAG:-latest}}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: user
+    restart: unless-stopped
+    network_mode: "service:edge"
+    depends_on:
+      - edge
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *app-env
+      PORT: "3002"
+    volumes:
+      - danmo-data:/data
+
+volumes:
+  danmo-data:

@@ -24,19 +24,20 @@ crates/core/migrations/
 - 不要为 relay / admin / user 各维护一套迁移目录（它们共享表结构）。
 - 不要把 sqlite 与 mysql 的 DDL 混在同一文件里。
 
-## 部署脚本
+## 部署（Docker Compose / GHCR）
 
-| 脚本 | 用途 |
-|------|------|
-| [`deploy/scripts/install.sh`](deploy/scripts/install.sh) | **首次发布**：`.env`、systemd、Nginx、启动进程 |
-| [`deploy/scripts/upgrade.sh`](deploy/scripts/upgrade.sh) | **升级**：停服务 → 换二进制/Portal → 启动（SQL 增量由进程 migrate） |
-| [`deploy/scripts/setup-nginx.sh`](deploy/scripts/setup-nginx.sh) | 兼容入口 → `install.sh --nginx-only` |
+| 脚本 / 文件 | 用途 |
+|-------------|------|
+| [`compose.yml`](compose.yml) | 四服务：relay / admin / user / edge（仅 edge 映射宿主机端口） |
+| [`deploy/scripts/install.sh`](deploy/scripts/install.sh) | **首次发布**：`.env` + `docker compose up` |
+| [`deploy/scripts/upgrade.sh`](deploy/scripts/upgrade.sh) | **升级**：pull 或 build 后 recreate（SQL 增量由进程 migrate） |
+| [`Dockerfile`](Dockerfile) | 多 target 镜像；Release 推送 GHCR |
 
-角色用 `--role=all|relay|admin|user` 选择本机组件，**不要**复制三套 install/upgrade 脚本。
+角色用 `--role=all|relay|admin|user`（Compose **profiles**），**不要**恢复 systemd 或 `/opt/danmo` 主机安装链。
 
-`install.sh` 写入 `${PREFIX}/danmo-install.conf` 与 `/etc/danmo/install.conf`；`upgrade.sh` **默认读该文件** 得知安装目录，勿假设永远是 `/opt/danmo`。
+Portal 静态打进 `danmo-edge`，**不走 OSS/CDN**。改部署行为时同步更新 [`docs/operations.md`](docs/operations.md) 与 [`deploy/README.md`](deploy/README.md)。
 
-改安装/升级行为时同步更新 [`docs/operations.md`](docs/operations.md) 与 [`deploy/README.md`](deploy/README.md)。
+开发与单测用 `make check` / `make run-*`；整栈冒烟用 Compose。
 
 ## 文档地图
 

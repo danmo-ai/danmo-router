@@ -9,7 +9,7 @@
 | 系统设计（协议、方言、计费、渠道健康、`CB_*`/`RL_*`） | [architecture.md](architecture.md) |
 | 与同类项目对比 | [comparison.md](comparison.md) |
 | 合法授权、可接受使用与责任边界 | [compliance.md](compliance.md) |
-| 首次发布 / 升级脚本、Nginx | [deploy/README.md](../deploy/README.md)（`install.sh` / `upgrade.sh`） |
+| Compose 首次发布 / 升级、edge Nginx | [deploy/README.md](../deploy/README.md)（`install.sh` / `upgrade.sh`） |
 | Agent 与迁移规则 | [AGENTS.md](../AGENTS.md) |
 | 本地开发与 Makefile | [README.md](../README.md) |
 | 环境变量模板 | [`.env.example`](../.env.example) |
@@ -25,7 +25,7 @@
 | `danmo-user` | 3002 | 用户 API | 通常 1～少量副本 |
 | `danmo-router` | 3000 | 本地一体进程 | **勿用于生产** |
 
-Portal 静态资源：`apps/admin/dist`（5173）、`apps/user/dist`（5174），生产由 CDN / Nginx 托管。
+Portal 静态资源：开发时 `apps/admin`（5173）、`apps/user`（5174）；生产打进 **`danmo-edge`**，由 Compose Nginx 同域托管（不走 OSS/CDN）。
 
 ```text
 Client ──► LB ──► danmo-relay × N ──► upstream LLM
@@ -50,20 +50,18 @@ User UI  ──────► danmo-user
 
 ## 构建与发布产物
 
-**本地打包（二进制 + Portal + `.env.example`）：**
+**整栈（与生产同拓扑）：**
 
 ```bash
-make package
-# 完整 dist/：bin/、apps/{admin,user}、deploy/、.env.example
-# 按角色分包 dist/packages/：
-#   danmo-user-portal/   → bin/danmo-user + apps/user（用户 API + Portal 同一包）
-#   danmo-admin-portal/  → bin/danmo-admin + apps/admin
-#   danmo-relay/         → bin/danmo-relay
+cp .env.example .env   # 修改密钥与域名
+make compose-up        # 或 ./deploy/scripts/install.sh
 ```
 
-小流量可 **一台机** 解压完整 `dist/`；分机时用户面只需拷贝 **`danmo-user-portal`** 到 `/opt/danmo-user`（管理面、relay 同理），仍共用一份 `.env` 中的数据库与 `ENCRYPTION_KEY`。
+**本地镜像构建：** `make docker-build`（四 target：relay/admin/user/edge）。
 
-**Release：** 推送 `v*` tag 触发 [`.github/workflows/release.yml`](../.github/workflows/release.yml)。每个平台的 **`danmo-router-<tag>-<target>.tar.gz`** 含二进制、**`apps/admin` / `apps/user` Portal 静态**、`deploy/`、`packages/`（布局见 [`deploy/RELEASE-LAYOUT.md`](../deploy/RELEASE-LAYOUT.md)）。另附仅静态的 `danmo-portals-<tag>.tar.gz`。
+**Release：** 推送 `v*` tag → [`.github/workflows/release.yml`](../.github/workflows/release.yml) 向 **GHCR** 推送四镜像（见 [`deploy/RELEASE-LAYOUT.md`](../deploy/RELEASE-LAYOUT.md)）。**不再**发布平台二进制 tar 或 portals tar。
+
+开发 / 单测仍用 `make check`、`make run-*`（cargo），不必打 Release 包。
 
 **质量门禁（与 CI 一致）：**
 
@@ -71,206 +69,108 @@ make package
 make check   # fmt + clippy + test
 ```
 
-## 生产部署（拆分）
+## 生产部署（Compose）
 
-**TLS 建议：** `danmo-relay` 仅提供 **HTTP**（默认 `:3000`）。公网 HTTPS 由 **前置 Nginx** 终结证书，再反代到 `127.0.0.1:3000`（或本机 `:3000`）；大流量与流式场景不要在 relay 进程内做 TLS。
+**TLS：** 后端仅 HTTP。公网 HTTPS 由 **edge Nginx**（`danmo-edge`）或云四层/七层 LB 终结；不要在 relay 进程内做 TLS。
 
-- **首次发布：** `dist/deploy/scripts/install.sh`（需 root）— `.env`、systemd、Nginx、启动；`--role=all|relay|admin|user`。证书未齐时提示 certbot，不静默申请。
-- **升级：** 解压新版本后在包内执行 `sudo ./deploy/scripts/upgrade.sh`（**`--from-dir` 默认为该解压根目录**）；安装目标读 **`/etc/danmo/install.conf`**。也可显式 `--from-dir=` / `--prefix=` / `--role=` / `--config=`。换二进制/Portal 后启动；**增量 SQL** 由进程 `migrate()` 执行（`migrations/sqlite/`，**MySQL 即将支持** `migrations/mysql/`）。
-- **手工 Nginx 模板：** [`deploy/examples/nginx/`](../deploy/examples/nginx/)。旧入口 `setup-nginx.sh` → `install.sh --nginx-only`。
+- **首次发布：** [`deploy/scripts/install.sh`](../deploy/scripts/install.sh) — 更新 `.env`、按 `--role=` 选择 Compose profiles、`docker compose up -d`。证书未齐时用 `ENABLE_TLS=0`（LB 终结）或准备好 `./certs` 后加 `--enable-tls`。
+- **升级：** [`deploy/scripts/upgrade.sh`](../deploy/scripts/upgrade.sh) — 默认 `pull` + recreate；`--build` 从源码重建。增量 SQL 由进程 `migrate()` 执行。
+- **Nginx 模板：** [`deploy/compose/nginx/`](../deploy/compose/nginx/)。旧主机脚本 `setup-nginx.sh` 已废弃。
 
 ```text
-Client ──TLS──► Nginx:443 ──HTTP──► danmo-relay:3000
-         （可选）四层 LB TCP:443 ──► 节点 Nginx:443
+Client ──► [可选四层 LB] ──► edge:80/443 ──HTTP──► relay|admin|user（Compose 内网）
 ```
 
-1. 将 `dist/bin` 安装到统一路径（如 `/opt/danmo/bin`），Portal 到 `/opt/danmo/apps/`，`.env` 放在 `/opt/danmo/.env`。
-2. systemd 模板见 [`deploy/examples/systemd/`](../deploy/examples/systemd/)；三组进程共享 `EnvironmentFile`，仅 `PORT` 与二进制不同。
-3. 反代示例：
+| 公网域名 | edge 行为 | 注意 |
+|----------|-----------|------|
+| `api.example.com` | 反代 → `relay:3000` | `proxy_buffering off`、长读超时 |
+| `admin.example.com` | 静态 admin + `/api` → `admin:3001` | 与 Portal 同域 Cookie |
+| `user.example.com` | 静态 user + `/api` → `user:3002` | |
 
-| 公网域名 | 后端 | 注意 |
-|----------|------|------|
-| `api.example.com` | `danmo-relay:3000` | `proxy_buffering off`、足够长的读超时 |
-| `admin-api.example.com` | `danmo-admin:3001` | 限制来源 IP |
-| `user-api.example.com` | `danmo-user:3002` | |
-| 管理 Portal | 静态 `admin/dist`，`/api` → admin API | |
-| 用户 Portal | 静态 `user/dist`，`/api` → user API | |
-
-完整 **Nginx** server 块（含 TLS、`/v1` 流式、`80` ACME）见 [`deploy/examples/nginx/danmo-relay.conf`](../deploy/examples/nginx/danmo-relay.conf)；Portal 见 `danmo-portal-admin.conf` / `danmo-portal-user.conf`。
+**仅 edge 映射宿主机端口**；Compose 中 API 容器与 edge 共享网络命名空间（`127.0.0.1:300x`），勿再单独发布 3000/3001/3002。云 Serverless 分任务部署时改用平台内网 DNS，并设置 `RELAY_UPSTREAM` / `ADMIN_UPSTREAM` / `USER_UPSTREAM`。
 
 ## 云厂商平台部署
 
-按平台给出参考方案：**四层 LB** 承接 `danmo-relay`、**HTTP `/healthz`** 探活、**对象存储 + CDN** 发布 Portal（同源 `/api` 回源 admin/user）。下文「部署共性」适用于各云；其后分厂商列出对应产品名与控制台配置。
+两条路径共用 GHCR 镜像（`danmo-relay` / `danmo-admin` / `danmo-user` / `danmo-edge`）：
+
+1. **云本机 Compose**：ECS/CVM 安装 Docker → `install.sh` / `compose up`；LB → 主机 edge:80/443。
+2. **云 Serverless 容器**：平台拉取同一镜像（阿里云 SAE、腾讯云容器型、AWS App Runner / ECS Fargate 等）；配置探活、长超时、持久卷；Portal 仍跑 **edge**，**不走 OSS/CDN**。
 
 ### 部署共性
 
-**组件与域名**
-
-| 组件 | 进程/产物 | 典型端口 | 公网域名示例 |
-|------|-----------|----------|--------------|
-| 转发 | `danmo-relay` | 3000 | `api.example.com` |
-| 管理 API | `danmo-admin` | 3001 | 不直连公网，由 Portal 回源 |
-| 用户 API | `danmo-user` | 3002 | 不直连公网，由 Portal 回源 |
-| 管理 Portal | `apps/admin/dist` | — | `admin.example.com` |
-| 用户 Portal | `apps/user/dist` | — | `user.example.com` |
+| 组件 | 镜像 / 进程 | 典型端口 | 公网域名示例 |
+|------|-------------|----------|--------------|
+| 转发 | `danmo-relay` | 3000（内网） | 经 edge：`api.example.com` |
+| 管理 API | `danmo-admin` | 3001（内网） | 经 edge `/api` |
+| 用户 API | `danmo-user` | 3002（内网） | 经 edge `/api` |
+| 边缘 | `danmo-edge` | 80/443 | api / admin / user 域名 |
 
 ```text
-api.example.com     ──► 云厂商「四层 LB」──► relay ECS/CVM × N :3000
-admin.example.com   ──► CDN ──► OSS/COS（静态）+ 回源 /api ──► admin :3001（内网/VPC）
-user.example.com    ──► CDN ──► OSS/COS（静态）+ 回源 /api ──► user  :3002（内网/VPC）
+api.example.com     ──► 云 LB ──► edge ──► relay
+admin.example.com   ──► 云 LB ──► edge（静态 admin + /api → admin）
+user.example.com    ──► 云 LB ──► edge（静态 user  + /api → user）
 ```
 
-**实例内进程：** 各计算实例安装 Release 二进制，共享 `/opt/danmo/.env`。relay 节点只跑 relay；admin/user 可同机或分机。SQLite 库宜 **NAS/云盘共享** 或控制写并发（见 [扩缩容与容量](#扩缩容与容量)）。
+**数据：** SQLite 使用 Compose 命名卷或云盘挂载到 `/data`；多 relay 副本仍受 SQLite 限制（见 [扩缩容与容量](#扩缩容与容量)）。Serverless 须挂载持久卷，不宜无状态冷启动 + 本地盘。
 
-**LB 探活（与进程内渠道熔断无关）：**
+**LB 探活：** HTTP `/healthz`。Compose 单机可探活 edge（`Host: api…`）或直连任务端口 3000（若平台把 relay 单独暴露在 VPC 内）。
 
-| 字段 | relay | admin | user |
-|------|-------|-------|------|
-| 协议 | HTTP | HTTP | HTTP |
-| 端口 | 3000 | 3001 | 3002 |
-| 路径 | `/healthz` | `/healthz` | `/healthz` |
+| 字段 | 建议 |
+|------|------|
+| 协议 | HTTP |
+| 路径 | `/healthz` |
+| 超时 | relay 流式场景尽量加大空闲超时 |
 
-**Portal 构建：** `npm ci && VITE_COMPLIANCE_URL=… npm run build`（admin/user 各一份）。浏览器请求相对路径 `/api/*` 且带 Cookie，**须** Portal 与 `/api` **同域名**（CDN 路径回源或七层反代）。
-
-**转发面用四层 LB：** Relay 含长连接 SSE/流式；四层 TCP 不分片缓冲 HTTP body。TLS 推荐 **LB TCP:443 → 实例 Nginx:443 → 127.0.0.1:3000**，示例见 [`deploy/examples/nginx/danmo-relay.conf`](../deploy/examples/nginx/danmo-relay.conf)。
+**Portal：** 流量小，静态打进 `danmo-edge`，与 `/api` 同域；**不要**再配 OSS/COS + CDN 托管 Portal。
 
 ### 阿里云
 
 | 用途 | 产品 |
 |------|------|
-| relay | ECS（或 ACK 节点） |
-| 转发入口 | **NLB** TCP 443 |
-| Portal | **OSS** + **CDN** / **DCDN** |
-| 证书 | 数字证书管理服务 |
+| 计算 | ECS + Docker Compose，或 **SAE** / ACK 跑容器 |
+| 入口 | **NLB** TCP 80/443 → edge |
+| 证书 | 数字证书管理服务（LB 或 edge） |
 
-NLB：后端 relay ECS，健康检查 HTTP 端口 **3000** 路径 **`/healthz`**；空闲超时尽量调大。安全组仅允许 NLB 网段访问 3000/443，**禁止** 0.0.0.0/0 访问 3001/3002。Portal：OSS 托管静态，CDN 配置 SPA 回源与 **`/api/*` 路径回源** 至内网 admin/user（或 ALB 七层统一域名）。`api.example.com` CNAME 到 NLB。
-
-### 腾讯云
-
-| 用途 | 产品 |
-|------|------|
-| relay | CVM |
-| 转发入口 | **网络 CLB** TCP:443 |
-| Portal | **COS** + **CDN** |
-
-健康检查 HTTP **3000** `/healthz`。COS+CDN 默认源站 COS，**`/api/` 独立回源** 至 admin/user 内网 CLB 或 CVM；或七层 CLB 上 Nginx 托管静态并 `location /api/` 反代。
-
-### 华为云
-
-**ELB 四层** TCP 443 → relay ECS，HTTP 探活 **3000** `/healthz`。**OBS + CDN**，`/api/*` 多源站回源至 admin/user 私网 ECS 或七层 ELB。
-
-### 火山引擎
-
-**四层 CLB** TCP 443，HTTP `/healthz`:3000。**TOS + CDN**，`/api/` 独立源站；`api.example.com` **勿经 CDN**。
-
-### AWS
-
-**NLB** TCP 443，Target group HTTP `/healthz` on **3000**，Deregistration delay 300–600s。**S3 + CloudFront**：默认行为走 S3 静态；**/api/\*** 第二 Origin 指向 admin/user（CachingDisabled）；`api.example.com` 单独指 NLB。EKS：relay `Service` LoadBalancer + `readinessProbe` `/healthz:3000`。
-
-### Google Cloud / Azure
-
-GCP：**Network LB** TCP 443，HTTP 探活 3000 `/healthz`；Portal 用 Cloud CDN + ALB URL map 分发 `/api/*`。Azure：**Standard Load Balancer** TCP 443 + HTTP probe；Portal 用 **Front Door** / Application Gateway 路由静态与 `/api/*`。
-
-### 平台选型速查
-
-| 平台 | 四层转发 | 静态 Portal | `/api` 回源 |
-|------|----------|-------------|-------------|
-| 阿里云 | NLB | OSS + CDN | CDN 路径回源 / ALB |
-| 腾讯云 | 网络 CLB | COS + CDN | CDN 多源站 / 七层 CLB |
-| 华为云 | ELB TCP | OBS + CDN | CDN → 内网 ECS/ELB |
-| 火山引擎 | CLB 四层 | TOS + CDN | CDN 独立源站 |
-| AWS | NLB | S3 + CloudFront | 第二 Origin |
-| GCP | Network LB | GCS + CDN | ALB URL map |
-| Azure | Load Balancer | Blob + Front Door | Front Door route |
-
-**云平台验收：** 仅四层 LB 公网暴露 relay；探活 `/healthz` 生效；API 域名不经 CDN；Portal 登录 Cookie 正常；`PUBLIC_RELAY_URL` 与 LB 域名一致。
-
-## 云厂商平台部署
-
-按平台给出参考方案：**四层 LB** 承接 `danmo-relay`、**HTTP `/healthz`** 探活、**对象存储 + CDN** 发布 Portal（同源 `/api` 回源 admin/user）。下文「部署共性」适用于各云；其后分厂商列出对应产品名与控制台配置。
-
-### 部署共性
-
-**组件与域名**
-
-| 组件 | 进程/产物 | 典型端口 | 公网域名示例 |
-|------|-----------|----------|--------------|
-| 转发 | `danmo-relay` | 3000 | `api.example.com` |
-| 管理 API | `danmo-admin` | 3001 | 不直连公网，由 Portal 回源 |
-| 用户 API | `danmo-user` | 3002 | 不直连公网，由 Portal 回源 |
-| 管理 Portal | `apps/admin/dist` | — | `admin.example.com` |
-| 用户 Portal | `apps/user/dist` | — | `user.example.com` |
-
-```text
-api.example.com     ──► 云厂商「四层 LB」──► relay ECS/CVM × N :3000
-admin.example.com   ──► CDN ──► OSS/COS（静态）+ 回源 /api ──► admin :3001（内网/VPC）
-user.example.com    ──► CDN ──► OSS/COS（静态）+ 回源 /api ──► user  :3002（内网/VPC）
-```
-
-**实例内进程：** 各计算实例安装 Release 二进制，共享 `/opt/danmo/.env`。relay 节点只跑 relay；admin/user 可同机或分机。SQLite 库宜 **NAS/云盘共享** 或控制写并发（见 [扩缩容与容量](#扩缩容与容量)）。
-
-**LB 探活（与进程内渠道熔断无关）：**
-
-| 字段 | relay | admin | user |
-|------|-------|-------|------|
-| 协议 | HTTP | HTTP | HTTP |
-| 端口 | 3000 | 3001 | 3002 |
-| 路径 | `/healthz` | `/healthz` | `/healthz` |
-
-**Portal 构建：** `npm ci && VITE_COMPLIANCE_URL=… npm run build`（admin/user 各一份）。浏览器请求相对路径 `/api/*` 且带 Cookie，**须** Portal 与 `/api` **同域名**（CDN 路径回源或七层反代）。
-
-**转发面用四层 LB：** Relay 含长连接 SSE/流式；四层 TCP 不分片缓冲 HTTP body。TLS 推荐 **LB TCP:443 → 实例 Nginx:443 → 127.0.0.1:3000**，Nginx 配置见上文 relay 片段。
-
-### 阿里云
-
-| 用途 | 产品 |
-|------|------|
-| relay | ECS（或 ACK 节点） |
-| 转发入口 | **NLB** TCP 443 |
-| Portal | **OSS** + **CDN** / **DCDN** |
-| 证书 | 数字证书管理服务 |
-
-NLB：后端 relay ECS，健康检查 HTTP 端口 **3000** 路径 **`/healthz`**；空闲超时尽量调大。安全组仅允许 NLB 网段访问 3000/443，**禁止** 0.0.0.0/0 访问 3001/3002。Portal：OSS 托管静态，CDN 配置 SPA 回源与 **`/api/*` 路径回源** 至内网 admin/user（或 ALB 七层统一域名）。`api.example.com` CNAME 到 NLB。
+SAE/ACK：分别部署四镜像或至少 `relay`+`edge`；共享 NAS/云盘给 SQLite；安全组勿对公网开放 3001/3002。
 
 ### 腾讯云
 
 | 用途 | 产品 |
 |------|------|
-| relay | CVM |
-| 转发入口 | **网络 CLB** TCP:443 |
-| Portal | **COS** + **CDN** |
+| 计算 | CVM + Compose，或容器型服务 / TKE |
+| 入口 | **网络 CLB** → edge |
 
-健康检查 HTTP **3000** `/healthz`。COS+CDN 默认源站 COS，**`/api/` 独立回源** 至 admin/user 内网 CLB 或 CVM；或七层 CLB 上 Nginx 托管静态并 `location /api/` 反代。
+健康检查 HTTP `/healthz`。Portal 经 edge，无需 COS+CDN。
 
 ### 华为云
 
-**ELB 四层** TCP 443 → relay ECS，HTTP 探活 **3000** `/healthz`。**OBS + CDN**，`/api/*` 多源站回源至 admin/user 私网 ECS 或七层 ELB。
+**ELB** → ECS Compose 或云容器实例上的 edge；持久化云硬盘挂载 `/data`。
 
 ### 火山引擎
 
-**四层 CLB** TCP 443，HTTP `/healthz`:3000。**TOS + CDN**，`/api/` 独立源站；`api.example.com` **勿经 CDN**。
+**四层 CLB** → edge；TOS/CDN **不必**用于 Portal。
 
 ### AWS
 
-**NLB** TCP 443，Target group HTTP `/healthz` on **3000**，Deregistration delay 300–600s。**S3 + CloudFront**：默认行为走 S3 静态；**/api/\*** 第二 Origin 指向 admin/user（CachingDisabled）；`api.example.com` 单独指 NLB。EKS：relay `Service` LoadBalancer + `readinessProbe` `/healthz:3000`。
+**NLB** 或 ALB → ECS Fargate / App Runner 上的 edge；relay/admin/user 同 VPC 服务发现或 Compose on EC2。EFS/本地卷挂载 SQLite。App Runner / Fargate：拉长请求超时以支持 SSE。
 
 ### Google Cloud / Azure
 
-GCP：**Network LB** TCP 443，HTTP 探活 3000 `/healthz`；Portal 用 Cloud CDN + ALB URL map 分发 `/api/*`。Azure：**Standard Load Balancer** TCP 443 + HTTP probe；Portal 用 **Front Door** / Application Gateway 路由静态与 `/api/*`。
+GCP：Cloud Run / GCE + Compose；Azure：Container Apps / VM + Compose。LB 探活 `/healthz`；Portal 走 edge。
 
 ### 平台选型速查
 
-| 平台 | 四层转发 | 静态 Portal | `/api` 回源 |
-|------|----------|-------------|-------------|
-| 阿里云 | NLB | OSS + CDN | CDN 路径回源 / ALB |
-| 腾讯云 | 网络 CLB | COS + CDN | CDN 多源站 / 七层 CLB |
-| 华为云 | ELB TCP | OBS + CDN | CDN → 内网 ECS/ELB |
-| 火山引擎 | CLB 四层 | TOS + CDN | CDN 独立源站 |
-| AWS | NLB | S3 + CloudFront | 第二 Origin |
-| GCP | Network LB | GCS + CDN | ALB URL map |
-| Azure | Load Balancer | Blob + Front Door | Front Door route |
+| 平台 | 本机 Compose | Serverless 容器 | 入口 |
+|------|--------------|-----------------|------|
+| 阿里云 | ECS + Docker | SAE / ACK | NLB → edge |
+| 腾讯云 | CVM + Docker | 容器服务 / TKE | CLB → edge |
+| 华为云 | ECS + Docker | 云容器实例 | ELB → edge |
+| 火山引擎 | 主机 + Docker | 容器服务 | CLB → edge |
+| AWS | EC2 + Docker | App Runner / Fargate | NLB/ALB → edge |
+| GCP | GCE + Docker | Cloud Run | LB → edge |
+| Azure | VM + Docker | Container Apps | LB → edge |
 
-**云平台验收：** 仅四层 LB 公网暴露 relay；探活 `/healthz` 生效；API 域名不经 CDN；Portal 登录 Cookie 正常；`PUBLIC_RELAY_URL` 与 LB 域名一致。
+**验收：** 宿主机/节点仅 edge 端口对公网或 LB 开放；`/healthz` 经 edge 或内网探活成功；Portal 登录 Cookie 正常；`PUBLIC_RELAY_URL` 与对外 API 域名一致；未使用 OSS/CDN 托管 Portal。
 
 ## 环境变量速查
 
@@ -372,35 +272,38 @@ GET /healthz
 
 ## 升级与数据库迁移
 
+上线前勾选清单见上文「上线前检查清单」。
+
 1. **备份数据库**（见下一节）。
-2. 推荐流程（任意目录下载解压即可）：
+2. **推荐：**
 
 ```bash
-cd /tmp
-wget https://github.com/danmo-ai/danmo-router/releases/download/vX.Y.Z/danmo-router-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
-tar -xzf danmo-router-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
-cd danmo-router-vX.Y.Z-x86_64-unknown-linux-gnu
-sudo ./deploy/scripts/upgrade.sh
-# --from-dir 默认为当前解压根；安装目标读 /etc/danmo/install.conf
+# 使用已发布的 GHCR tag
+export DANMO_TAG=vX.Y.Z
+./deploy/scripts/upgrade.sh
+
+# 或从当前源码重建
+./deploy/scripts/upgrade.sh --build
 ```
 
-手工滚动时顺序建议 **admin/user → relay**。
+滚动时顺序建议先更新 admin/user，再更新 relay（或先扩新 relay 再摘旧实例）。
 
 3. **不要**用脚本重跑全部 SQL。进程启动时对当前引擎目录（现 **sqlite**）只应用 `schema_migrations` 中尚未记录的版本；MySQL 接通后加载 `migrations/mysql/`。
-4. 观察日志 `applied migration N`；失败则回滚二进制与库文件。
+4. 观察日志 `applied migration N`；失败则回滚镜像 tag 与库文件。
 
 新增 schema：**必须**新增编号 SQL 文件（见 [AGENTS.md](../AGENTS.md) 与 [`crates/core/migrations/README.md`](../crates/core/migrations/README.md)），禁止改已发布的旧文件。
 
-**版本兼容：** 同一发行版内 admin、relay、user 应使用**相同 git/tag 构建**。
+**版本兼容：** 同一发行版内 admin、relay、user、edge 应使用**相同 git/tag 构建**。
 
 ## 备份与恢复
 
-**SQLite：**
+**SQLite（Compose 卷 `/data`）：**
 
 ```bash
-# 推荐在业务低峰、且最好仅一个写进程时拷贝；或使用 sqlite3 .backup
-cp /path/to/danmo.db /backup/danmo-$(date +%F).db
-# WAL 模式下可同时保留 danmo.db-wal / danmo.db-shm，或 checkpoint 后单文件拷贝
+# 业务低峰导出命名卷（项目名默认 danmo → 卷 danmo_danmo-data）
+docker compose run --rm --no-deps -v danmo_danmo-data:/data:ro alpine \
+  tar -c -f - -C /data . > danmo-data-backup-$(date +%F).tar
+# 或在仅一个写进程时拷贝卷内 danmo.db（含 -wal/-shm 或先 checkpoint）
 ```
 
 **必须一并安全保管：**
@@ -408,7 +311,7 @@ cp /path/to/danmo.db /backup/danmo-$(date +%F).db
 - `ENCRYPTION_KEY`（丢失则渠道上游 Key 无法解密）
 - `.env` 中的管理员与 CORS 等配置
 
-**恢复：** 停所有进程 → 还原 `danmo.db` → 确认 `ENCRYPTION_KEY` 与备份时一致 → 按部署章节启动。
+**恢复：** `docker compose down` → 还原卷内数据库文件 → 确认 `ENCRYPTION_KEY` 一致 → `docker compose up -d`。
 
 **演示数据重置：** 删除 SQLite 文件后设 `SEED_DEMO=1` 可重新生成示例（仅开发/演示环境）。
 
@@ -444,7 +347,7 @@ cp /path/to/danmo.db /backup/danmo-$(date +%F).db
 | 调价 / 分组 | 模型价格、用户 `group_name`、abilities |
 | 兑换码 | 管理后台生成；用户中心兑换 |
 | 禁用渠道 | 管理 API / 界面改渠道 `status`（全实例立即生效，与内存熔断互补） |
-| 发布新版本 | tag → Release 产物 → 备份 → 滚动升级 |
+| 发布新版本 | tag → GHCR 镜像 → 备份卷 → `upgrade.sh` |
 | 本地复现 | `SEED_DEMO=1` + [README 本地开发](../README.md#本地开发) |
 
 ## 相关命令
@@ -452,10 +355,11 @@ cp /path/to/danmo.db /backup/danmo-$(date +%F).db
 ```bash
 make help
 make check            # fmt + clippy + test
-make package          # dist/ + packages/（二进制、Portal、deploy）
-make run-relay        # :3000
-make run-admin        # API :3001 + Portal :5173
-make run-user         # API :3002 + Portal :5174
+make docker-build     # 本地构建四镜像
+make compose-up       # 整栈 Compose（需 Docker）
+make run-relay        # 开发：cargo relay :3000
+make run-admin        # 开发：API :3001 + Portal :5173
+make run-user         # 开发：API :3002 + Portal :5174
 ```
 
 ---
