@@ -123,7 +123,7 @@ make run-all-in-one
 | `alice` | `alice123` | 普通用户 |
 | `bob` | `bob12345` | 已禁用 |
 
-示例令牌 `sk-demo-playground` 属于 `demo`。渠道里的上游 Key 都是占位符（`sk-demo-…-not-a-real-key`），不能打到真实厂商。示例里包含 OpenAI、Anthropic、DeepSeek、可协议转换的 Qwen、Gemini，以及一条停用的聚合渠道；价格表带原厂方言、输入分档和时段系数；管理后台有若干未使用的兑换码；日志里有成功、计费失败和上游错误。
+示例令牌 `sk-de0100000000000000000000000000000000000000000000`（playground）属于 `demo`。旧版本种子里的 `sk-demo-playground` 不符合令牌格式、会被 relay 拒绝；已有演示库删除后重新以 `SEED_DEMO=1` 启动即可。渠道里的上游 Key 都是占位符（`sk-demo-…-not-a-real-key`），不能打到真实厂商。示例里包含 OpenAI、Anthropic、DeepSeek、可协议转换的 Qwen、Gemini，以及一条停用的聚合渠道；价格表带原厂方言、输入分档和时段系数；管理后台有若干未使用的兑换码；日志里有成功、计费失败和上游错误。
 
 生产环境保持 `SEED_DEMO=0`。
 

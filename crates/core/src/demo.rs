@@ -16,7 +16,11 @@ use tracing::info;
 
 const DEMO_USER: &str = "demo";
 const DEMO_PASSWORD: &str = "demo1234";
-pub const DEMO_API_KEY: &str = "sk-demo-playground";
+/// Demo keys use the legacy `sk-` + 48 hex format so the relay admits them without signing.
+pub const DEMO_API_KEY: &str = "sk-de0100000000000000000000000000000000000000000000";
+pub const DEMO_BATCH_KEY: &str = "sk-de0200000000000000000000000000000000000000000000";
+pub const DEMO_DISABLED_KEY: &str = "sk-de0300000000000000000000000000000000000000000000";
+pub const DEMO_ALICE_KEY: &str = "sk-de0400000000000000000000000000000000000000000000";
 
 pub async fn seed_demo(pool: &DbPool, enc_key: &[u8; 32]) -> AppResult<()> {
     let demo =
@@ -50,7 +54,7 @@ pub async fn seed_demo(pool: &DbPool, enc_key: &[u8; 32]) -> AppResult<()> {
         pool,
         demo.id,
         "batch",
-        "sk-demo-batch",
+        DEMO_BATCH_KEY,
         50_000,
         false,
         "active",
@@ -60,7 +64,7 @@ pub async fn seed_demo(pool: &DbPool, enc_key: &[u8; 32]) -> AppResult<()> {
         pool,
         demo.id,
         "legacy",
-        "sk-demo-legacy",
+        DEMO_DISABLED_KEY,
         -1,
         true,
         "disabled",
@@ -70,7 +74,7 @@ pub async fn seed_demo(pool: &DbPool, enc_key: &[u8; 32]) -> AppResult<()> {
         pool,
         alice.id,
         "notebook",
-        "sk-demo-alice",
+        DEMO_ALICE_KEY,
         -1,
         true,
         "active",

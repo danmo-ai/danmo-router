@@ -1,6 +1,7 @@
 use danmo_core::config::Config;
+use danmo_core::crypto::{classify_api_key, ApiKeyClass};
 use danmo_core::db::connect;
-use danmo_core::demo::DEMO_API_KEY;
+use danmo_core::demo::{DEMO_ALICE_KEY, DEMO_API_KEY, DEMO_BATCH_KEY, DEMO_DISABLED_KEY};
 use danmo_core::services::{
     channel, log as log_svc, redemption, token as token_svc, user as user_svc,
 };
@@ -42,6 +43,19 @@ async fn demo_seed_fills_portals_and_does_not_repeat() {
         .await
         .unwrap();
     assert_eq!(auth.user.id, demo.id);
+    let enc_key = Config::from_env().unwrap().encryption_key;
+    for key in [
+        DEMO_API_KEY,
+        DEMO_BATCH_KEY,
+        DEMO_DISABLED_KEY,
+        DEMO_ALICE_KEY,
+    ] {
+        assert_eq!(
+            classify_api_key(&enc_key, key),
+            ApiKeyClass::Legacy,
+            "{key}"
+        );
+    }
     let tokens = token_svc::list_by_user(&pool, demo.id).await.unwrap();
     assert_eq!(tokens.len(), 3);
     assert!(tokens.iter().any(|t| t.status == "disabled"));

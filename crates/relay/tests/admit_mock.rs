@@ -247,3 +247,19 @@ async fn dropping_a_stream_releases_the_account_slot() {
     drop(resp);
     assert_eq!(h.state.user_in_flight(h.user_id), 0);
 }
+
+#[tokio::test]
+async fn seeded_demo_key_is_admitted() {
+    let h = Harness::with_config(|config| config.seed_demo = true).await;
+    let app = danmo_relay::router(h.state.clone());
+    let req = axum::http::Request::builder()
+        .uri("/v1/models")
+        .header(
+            "authorization",
+            format!("Bearer {}", danmo_core::demo::DEMO_API_KEY),
+        )
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let resp = tower::ServiceExt::oneshot(app, req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+}
