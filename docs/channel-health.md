@@ -70,4 +70,4 @@ weighted_shuffle_by_priority（同优先级内按 effective_weight 随机）
 - 多副本时若需「全局一致」的禁用状态，当前方案** intentionally 未做**（无 Redis/写库）；若某 key 长期 401，渠道不会被熔断，需人工禁用渠道。
 - 后续可选：只读 HTTP 暴露内存健康表、401 可选立即熔断、长期踢出后写 `auto_disabled`（见架构文档「边界」）。
 
-与 One API、New API、LiteLLM 等在渠道可用性上的客观对比见专门文档 **[开源 LLM 中转站：渠道可用性对比](open-source-relay-comparison.md)**。
+与 One API、New API、LiteLLM 等在渠道可用性上的客观对比见 **[comparison.md — 渠道可用性与上游隔离](comparison.md#渠道可用性与上游隔离)**。

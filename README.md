@@ -1,6 +1,10 @@
 # danmo-router
 
-多协议 LLM 中转站：Chat、Responses、Messages、Gemini、Embeddings 转发，管理 Portal 和用户 Portal。客户端按模型看到的协议行为与原厂一致；渠道按每个模型配置上游方言。设计见 [docs/architecture.md](docs/architecture.md)。
+多协议 LLM 中转站：Chat、Responses、Messages、Gemini、Embeddings 转发，管理 Portal 和用户 Portal。客户端按模型看到的协议行为与原厂一致；渠道按每个模型配置上游方言。
+
+- 设计：[docs/architecture.md](docs/architecture.md)
+- 与 One API、New API、LiteLLM、GPT-Load、Sub2API 等的客观对比：[docs/comparison.md](docs/comparison.md)
+- relay 渠道熔断与 429 降权（`CB_*` / `RL_*`）：[docs/channel-health.md](docs/channel-health.md)
 
 ## 架构
 
@@ -39,7 +43,7 @@ User UI  ──────► danmo-user  × 1..N
 | `POST /v1beta/models/{model}:streamGenerateContent` | Gemini 流式 |
 | `GET /v1/models` | 模型列表 |
 
-完整的方言列表、转发判定、数据模型和计费公式见 [系统架构](docs/architecture.md)。渠道熔断与 429 降权见 [渠道健康与选路](docs/channel-health.md)；与 One API / New API / LiteLLM 等的客观对比见 [开源中转站渠道可用性对比](docs/open-source-relay-comparison.md)。
+完整的方言列表、转发判定、数据模型和计费公式见 [系统架构](docs/architecture.md)。
 
 ## Makefile
 
@@ -114,7 +118,7 @@ git tag v0.1.0 && git push origin v0.1.0
 
 见 [`.env.example`](.env.example)。`PORT` 未设置时各二进制使用上表默认端口。
 
-relay 进程另支持渠道健康相关变量（`CB_*`、`RL_*`，默认开启），说明见 [渠道健康与选路](docs/channel-health.md#环境变量)。
+`CB_*` / `RL_*` 等 relay 变量见 [渠道健康与选路](docs/channel-health.md#环境变量)。
 
 ## 调用 API
 
