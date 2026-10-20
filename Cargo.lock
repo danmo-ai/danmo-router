@@ -474,15 +474,21 @@ version = "0.3.3"
 dependencies = [
  "anyhow",
  "axum",
+ "chrono",
  "danmo-admin-api",
  "danmo-core",
  "danmo-relay",
  "danmo-user-api",
  "dotenvy",
+ "http-body-util",
+ "serde_json",
+ "tempfile",
  "tokio",
+ "tower",
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "wiremock",
 ]
 
 [[package]]

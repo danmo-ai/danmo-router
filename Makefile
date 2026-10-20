@@ -12,7 +12,7 @@ RELAY_PORT ?= 3000
 ADMIN_PORT ?= 3001
 USER_PORT ?= 3002
 
-.PHONY: help check fmt fmt-check clippy test build release \
+.PHONY: help check fmt fmt-check clippy test test-stack build release \
 	run-relay run-admin run-user run-admin-api run-user-api run-all-in-one \
 	portals-install portals-build portals-dev-admin portals-dev-user \
 	docker-build compose-up compose-down compose-config clean
@@ -34,13 +34,16 @@ clippy: ## Clippy (-D warnings)
 test: ## Rust tests
 	$(CARGO) test --workspace
 
+test-stack: ## Integration tests (clean DB, mock upstream)
+	$(CARGO) test -p danmo-server --test stack
+
 check: fmt-check clippy test ## CI: fmt + clippy + test
 
 ## Build
 build: ## Debug binaries
 	$(CARGO) build -p danmo-server --bins
 
-release: ## Release binaries (local cargo; production uses Docker images)
+release: test-stack ## Release binaries (local cargo; production uses Docker images)
 	$(CARGO) build -p danmo-server --bins --release
 
 ## Local run (cargo / Vite — not Compose)
@@ -76,7 +79,7 @@ portals-dev-user: ## User Portal only :5174
 	cd apps/user && $(NPM) run dev
 
 ## Docker / Compose
-docker-build: ## Build local images (relay/admin/user/edge)
+docker-build: test-stack ## Build local images (relay/admin/user/edge)
 	$(DOCKER) build --target relay -t $(IMAGE_PREFIX)/danmo-relay:$(DANMO_TAG) .
 	$(DOCKER) build --target admin -t $(IMAGE_PREFIX)/danmo-admin:$(DANMO_TAG) .
 	$(DOCKER) build --target user  -t $(IMAGE_PREFIX)/danmo-user:$(DANMO_TAG) .
