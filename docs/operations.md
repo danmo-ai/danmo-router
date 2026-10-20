@@ -53,8 +53,14 @@ User UI  ──────► danmo-user
 
 ```bash
 make package
-# 产出 dist/bin/{danmo-relay,danmo-admin,danmo-user} 与 dist/apps/{admin,user}
+# 完整 dist/：bin/、apps/{admin,user}、deploy/、.env.example
+# 按角色分包 dist/packages/：
+#   danmo-user-portal/   → bin/danmo-user + apps/user（用户 API + Portal 同一包）
+#   danmo-admin-portal/  → bin/danmo-admin + apps/admin
+#   danmo-relay/         → bin/danmo-relay
 ```
+
+小流量可 **一台机** 解压完整 `dist/`；分机时用户面只需拷贝 **`danmo-user-portal`** 到 `/opt/danmo-user`（管理面、relay 同理），仍共用一份 `.env` 中的数据库与 `ENCRYPTION_KEY`。
 
 **Release：** 推送 `v*` tag 触发 [`.github/workflows/release.yml`](../.github/workflows/release.yml)，GitHub Release 含多平台二进制 tar 与 Portal tar。
 
