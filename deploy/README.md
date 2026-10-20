@@ -31,9 +31,21 @@ sudo ./deploy/scripts/install.sh --role=relay --prefix=/opt/danmo-relay --skip-n
 
 ## 升级
 
+`install.sh` 会写入安装状态（**不是**猜目录）：
+
+| 文件 | 用途 |
+|------|------|
+| `${PREFIX}/danmo-install.conf` | 该安装根下的记录 |
+| `/etc/danmo/install.conf` | **upgrade 默认读取** |
+| `/etc/danmo/installs.d/<role>.conf` | 同机多角色时按 `--role=` 选用 |
+
 ```bash
-# 解压新版本到例如 /tmp/danmo-vX
-sudo ./deploy/scripts/upgrade.sh --from-dir=/tmp/danmo-vX --prefix=/opt/danmo --role=all
+# 解压新版本后：通常只需 --from-dir（prefix/role 来自 /etc/danmo/install.conf）
+sudo ./deploy/scripts/upgrade.sh --from-dir=/tmp/danmo-vX
+
+# 覆盖或同机多套安装：
+sudo ./deploy/scripts/upgrade.sh --from-dir=/tmp/danmo-vX --prefix=/opt/danmo-user --role=user
+sudo ./deploy/scripts/upgrade.sh --from-dir=/tmp/danmo-vX --config=/etc/danmo/installs.d/relay.conf
 ```
 
 停服务 → 备份并替换二进制/Portal → 启动；**仅应用未登记的增量 SQL**（`schema_migrations`）。

@@ -34,6 +34,8 @@ crates/core/migrations/
 
 角色用 `--role=all|relay|admin|user` 选择本机组件，**不要**复制三套 install/upgrade 脚本。
 
+`install.sh` 写入 `${PREFIX}/danmo-install.conf` 与 `/etc/danmo/install.conf`；`upgrade.sh` **默认读该文件** 得知安装目录，勿假设永远是 `/opt/danmo`。
+
 改安装/升级行为时同步更新 [`docs/operations.md`](docs/operations.md) 与 [`deploy/README.md`](deploy/README.md)。
 
 ## 文档地图

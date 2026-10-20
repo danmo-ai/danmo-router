@@ -76,7 +76,7 @@ make check   # fmt + clippy + test
 **TLS 建议：** `danmo-relay` 仅提供 **HTTP**（默认 `:3000`）。公网 HTTPS 由 **前置 Nginx** 终结证书，再反代到 `127.0.0.1:3000`（或本机 `:3000`）；大流量与流式场景不要在 relay 进程内做 TLS。
 
 - **首次发布：** `dist/deploy/scripts/install.sh`（需 root）— `.env`、systemd、Nginx、启动；`--role=all|relay|admin|user`。证书未齐时提示 certbot，不静默申请。
-- **升级：** `dist/deploy/scripts/upgrade.sh --from-dir=<新版本解压目录> --prefix=… --role=…` — 换二进制/Portal 后启动；**增量 SQL** 由进程 `migrate()` 按 `schema_migrations` 执行（引擎目录：`migrations/sqlite/`，**MySQL 即将支持** `migrations/mysql/`）。
+- **升级：** `dist/deploy/scripts/upgrade.sh --from-dir=<新版本解压目录>` — 默认读 **`/etc/danmo/install.conf`**（由 `install.sh` 写入的 PREFIX/ROLE）；也可 `--prefix=` / `--role=` / `--config=`。换二进制/Portal 后启动；**增量 SQL** 由进程 `migrate()` 执行（`migrations/sqlite/`，**MySQL 即将支持** `migrations/mysql/`）。
 - **手工 Nginx 模板：** [`deploy/examples/nginx/`](../deploy/examples/nginx/)。旧入口 `setup-nginx.sh` → `install.sh --nginx-only`。
 
 ```text

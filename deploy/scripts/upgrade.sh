@@ -247,10 +247,11 @@ info "Backup → ${BACKUP_DIR}"
 touch_install_conf
 
 if [[ "${SKIP_NGINX}" -eq 0 ]]; then
-  "${SCRIPT_DIR}/install.sh" --nginx-only --prefix="${PREFIX}" --role="${ROLE}" --non-interactive \
-    ${API_DOMAIN:+--api-domain="${API_DOMAIN}"} \
-    ${ADMIN_DOMAIN:+--admin-domain="${ADMIN_DOMAIN}"} \
-    ${USER_DOMAIN:+--user-domain="${USER_DOMAIN}"}
+  nginx_args=(--nginx-only --prefix="${PREFIX}" --role="${ROLE}" --non-interactive)
+  [[ -n "${API_DOMAIN}" ]] && nginx_args+=(--api-domain="${API_DOMAIN}")
+  [[ -n "${ADMIN_DOMAIN}" ]] && nginx_args+=(--admin-domain="${ADMIN_DOMAIN}")
+  [[ -n "${USER_DOMAIN}" ]] && nginx_args+=(--user-domain="${USER_DOMAIN}")
+  "${SCRIPT_DIR}/install.sh" "${nginx_args[@]}"
 fi
 
 info "Done. Check logs for 'applied migration N' (sqlite now; mysql/ when enabled)."
