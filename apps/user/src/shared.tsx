@@ -16,8 +16,32 @@ export function AuthPage({ onLogin }: { onLogin: (u: any) => void }) {
   const [mode, setMode] = useState<'login' | 'register'>('login')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [captchaToken, setCaptchaToken] = useState('')
+  const [captchaSvg, setCaptchaSvg] = useState('')
+  const [captchaAnswer, setCaptchaAnswer] = useState('')
   const [error, setError] = useState('')
   const navigate = useNavigate()
+
+  async function loadCaptcha() {
+    try {
+      const c = await api.captcha()
+      setCaptchaToken(c.token)
+      setCaptchaSvg(c.image_svg)
+      setCaptchaAnswer('')
+    } catch (err: any) {
+      setError(err.message || '验证码加载失败')
+    }
+  }
+
+  useEffect(() => {
+    if (mode === 'register') {
+      void loadCaptcha()
+    } else {
+      setCaptchaToken('')
+      setCaptchaSvg('')
+      setCaptchaAnswer('')
+    }
+  }, [mode])
 
   async function submit(e: FormEvent) {
     e.preventDefault()
@@ -26,11 +50,14 @@ export function AuthPage({ onLogin }: { onLogin: (u: any) => void }) {
       const u =
         mode === 'login'
           ? await api.login(username, password)
-          : await api.register(username, password)
+          : await api.register(username, password, captchaToken, captchaAnswer)
       onLogin(u)
       navigate('/')
     } catch (err: any) {
       setError(err.message)
+      if (mode === 'register') {
+        void loadCaptcha()
+      }
     }
   }
 
@@ -54,6 +81,39 @@ export function AuthPage({ onLogin }: { onLogin: (u: any) => void }) {
             minLength={6}
           />
         </label>
+        {mode === 'register' && (
+          <div className="captcha-row">
+            <label className="captcha-answer">
+              验证码
+              <input
+                value={captchaAnswer}
+                onChange={(e) => setCaptchaAnswer(e.target.value)}
+                required
+                autoComplete="off"
+                spellCheck={false}
+                maxLength={8}
+              />
+            </label>
+            <button
+              type="button"
+              className="captcha-image ghost"
+              onClick={() => void loadCaptcha()}
+              title="点击刷新验证码"
+              aria-label="刷新验证码"
+            >
+              {captchaSvg ? (
+                <img
+                  src={`data:image/svg+xml;utf8,${encodeURIComponent(captchaSvg)}`}
+                  alt="验证码"
+                  width={160}
+                  height={48}
+                />
+              ) : (
+                <span className="muted">加载中</span>
+              )}
+            </button>
+          </div>
+        )}
         <button type="submit">{mode === 'login' ? '登录' : '注册'}</button>
         <button
           type="button"

@@ -8,7 +8,7 @@ npm ci
 npm run dev
 ```
 
-在仓库根目录用 `make run-user` 可同时起用户 API 与本 Portal；仅前端则 `make portals-dev-user`。页面可以注册，也可以用 `SEED_DEMO=1` 生成的 `demo` / `demo1234` 登录。
+在仓库根目录用 `make run-user` 可同时起用户 API 与本 Portal；仅前端则 `make portals-dev-user`。页面可以注册（需图形验证码），也可以用 `SEED_DEMO=1` 生成的 `demo` / `demo1234` 登录。
 
 登录后可查看账户概览（额度、兑换码充值）、管理 API 令牌、浏览可用模型与价格、分页查看自己的调用日志。Relay 基址来自 `PUBLIC_RELAY_URL`（未设置时显示本地默认）。截图见 [根 README](../../README.md#界面)。
 

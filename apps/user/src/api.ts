@@ -21,10 +21,22 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  register: (username: string, password: string) =>
+  captcha: () =>
+    request<{ token: string; image_svg: string }>('/api/user/captcha'),
+  register: (
+    username: string,
+    password: string,
+    captcha_token: string,
+    captcha_answer: string,
+  ) =>
     request('/api/user/register', {
       method: 'POST',
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({
+        username,
+        password,
+        captcha_token,
+        captcha_answer,
+      }),
     }),
   login: (username: string, password: string) =>
     request('/api/user/login', {

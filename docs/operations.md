@@ -283,7 +283,7 @@ GCP：**Network LB** TCP 443，HTTP 探活 3000 `/healthz`；Portal 用 Cloud CD
 | `HOST` | `0.0.0.0` | 监听地址 |
 | `PORT` | 见上表 | 未设置时用各二进制默认端口 |
 | `DATABASE_URL` | `sqlite://data/danmo.db?mode=rwc` | 共享逻辑库；现仅 sqlite。`mysql://` 即将支持（迁移见 `migrations/mysql/`） |
-| `ENCRYPTION_KEY` | 开发用固定值 | 渠道 Key 加密与 API Key HMAC；**变更后已存渠道密文不可解密** |
+| `ENCRYPTION_KEY` | 开发用固定值 | 渠道 Key 加密、API Key HMAC、注册验证码密封；**变更后已存渠道密文不可解密** |
 | `RUST_LOG` | `info` | `tracing` 过滤器，如 `info,danmo_relay=debug` |
 | `CORS_ORIGINS` | localhost Portal | 逗号分隔 Origin |
 | `SESSION_TTL_HOURS` | `168` | 管理/用户会话 TTL（小时） |
