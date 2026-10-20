@@ -6,6 +6,12 @@
 - **运维（部署、配置、升级、备份、排障）：[docs/operations.md](docs/operations.md)**
 - 与 One API、New API、LiteLLM、GPT-Load、Sub2API 等的客观对比：[docs/comparison.md](docs/comparison.md)
 - relay 渠道熔断与 429 降权（`CB_*` / `RL_*`）：[docs/channel-health.md](docs/channel-health.md)
+- **部署前必读** — 合法授权、禁止规避上游协议的中转/转售、责任边界：[docs/compliance.md](docs/compliance.md)
+
+> **合规提示**  
+> danmo-router 是面向**合法授权**场景的自托管 API 网关（自用、团队内部、企业私有化部署）。部署方须**合法取得**上游 API Key 或合约，并遵守各 AI 厂商服务条款与所在地法律法规。  
+> 不得利用本软件将违反上游条款的订阅/账号池化后对外提供 API、按量转售未授权能力，或以协议转换等方式规避上游对再分发、自动化使用的限制。  
+> 面向公众提供生成式 AI 服务时的备案、内容安全、实名、日志、税务等义务由**部署方自行承担**。软件按 MIT「原样」提供，维护者不对部署方的经营行为或滥用后果负责。详见 [docs/compliance.md](docs/compliance.md)。
 
 ## 架构
 
@@ -134,6 +140,7 @@ make run-all-in-one
 2. 三组进程共用 `DATABASE_URL`、`ENCRYPTION_KEY`  
 3. `api.example.com` → relay（流式需 `proxy_buffering off`）；admin/user API 与 Portal 分域名  
 4. `CORS_ORIGINS`、`PUBLIC_RELAY_URL` 按真实域名配置  
+5. 构建 Portal 时可设 `VITE_COMPLIANCE_URL` 指向自托管的 [合规说明](docs/compliance.md)（默认链到 GitHub 文档）；页脚与登录页会展示链接  
 
 ## CI / Release
 

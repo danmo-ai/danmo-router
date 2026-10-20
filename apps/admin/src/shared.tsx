@@ -4,6 +4,7 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import type { FormEvent } from 'react'
 import { api } from './api'
 import type { Dialect, Meta } from './api'
+import { ComplianceAuthNotice, ComplianceFooterLink } from './compliance'
 
 export function useAuth() {
   const [user, setUser] = useState<any | null | undefined>(undefined)
@@ -50,6 +51,7 @@ export function LoginPage({ onLogin }: { onLogin: (u: any) => void }) {
           />
         </label>
         <button type="submit">登录</button>
+        <ComplianceAuthNotice />
       </form>
     </div>
   )
@@ -76,11 +78,14 @@ export function Layout({
           <NavLink to="/redemptions">兑换码</NavLink>
           <NavLink to="/logs">日志</NavLink>
         </nav>
-        <div className="aside-footer">
-          <div>{user.username}</div>
-          <button className="linkish" onClick={onLogout}>
-            退出
-          </button>
+        <div className="aside-bottom">
+          <ComplianceFooterLink />
+          <div className="aside-footer">
+            <div>{user.username}</div>
+            <button className="linkish" onClick={onLogout}>
+              退出
+            </button>
+          </div>
         </div>
       </aside>
       <main>{children}</main>

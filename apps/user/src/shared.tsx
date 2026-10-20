@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { api } from './api'
+import { ComplianceAuthNotice, ComplianceSiteFooter } from './compliance'
 
 export function useAuth() {
   const [user, setUser] = useState<any | null | undefined>(undefined)
@@ -61,6 +62,7 @@ export function AuthPage({ onLogin }: { onLogin: (u: any) => void }) {
         >
           {mode === 'login' ? '没有账号？注册' : '已有账号？登录'}
         </button>
+        <ComplianceAuthNotice />
       </form>
     </div>
   )
@@ -92,7 +94,10 @@ export function Layout({
           </button>
         </div>
       </header>
-      <main>{children}</main>
+      <div className="layout-body">
+        <main>{children}</main>
+        <ComplianceSiteFooter />
+      </div>
     </div>
   )
 }
