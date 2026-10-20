@@ -1,238 +1,346 @@
 # 云平台部署指南
 
-本文说明在公有云/私有云上部署 danmo-router 的推荐拓扑：**转发面用四层（L4）负载均衡**、**后端 HTTP 健康检查**、**Portal 静态站点与 `/api` 同源反代**。通用运维（环境变量、升级、备份）见 [operations.md](operations.md)。
+本文按**云厂商平台**给出 danmo-router 的参考部署方案：计算实例跑二进制、**四层负载均衡**承接转发流量、**HTTP `/healthz` 健康检查**、**对象存储 + CDN** 发布 Portal（同源 `/api` 回源到 admin/user）。环境变量、备份与排障见 [operations.md](operations.md)。
 
-## 目标拓扑
+## 部署共性（各平台相同部分）
 
-```text
-                    ┌─────────────────────────────────────────┐
-  客户端 / SDK      │  转发面（公网、高并发、长连接）           │
-       │            │  L4 LB (TCP) → danmo-relay × N :3000    │
-       └──────────►│  （可选：节点上 Nginx 终结 TLS）          │
-                    └─────────────────────────────────────────┘
+### 组件与域名
 
-  管理 Portal       admin.example.com
-       │            ├─ CDN / 对象存储：静态 assets
-       └──────────►└─ 同源 /api/* → danmo-admin :3001（内网）
-
-  用户 Portal       user.example.com
-       │            ├─ CDN / 对象存储：静态 assets
-       └──────────►└─ 同源 /api/* → danmo-user :3002（内网）
-
-  转发 API（可选独立域名）  api.example.com → 同一 L4 池 → relay :3000
-
-  共享数据层        DATABASE_URL（SQLite 文件卷 / 未来 Postgres）
-                    ENCRYPTION_KEY 全进程一致
-```
-
-| 入口 | 建议 LB 类型 | 原因 |
-|------|--------------|------|
-| `danmo-relay` | **四层 TCP/UDP LB** | 流式 SSE、长连接；避免七层对 body 缓冲或短 idle 超时 |
-| `danmo-admin` / `danmo-user` | 七层 HTTPS 或内网直连 | 短请求、会话 Cookie；QPS 低 |
-| Portal 静态 | CDN + 对象存储 | 缓存 `assets/*`；HTML 短缓存 |
-
-## 为什么转发用四层 LB
-
-- Relay 存在 **分钟级** 的流式响应；七层网关若开启响应缓冲、较小 `read timeout` 或未透传 `Connection`，容易断流。
-- 四层只做 **连接分发**，HTTP/TLS 可在 **后端 Nginx/Caddy** 或 **客户端 → NLB 透传 → 后端 TLS** 处理，行为更可预期。
-- 多副本时，单条 TCP 连接固定在一个后端（连接级亲和）；无 sticky 时每次新连接随机分配，符合无状态 relay 设计。
-
-## 转发面：四层 LB 配置要点
-
-### 监听器
-
-| 项 | 推荐值 |
-|----|--------|
-| 前端协议 | `TCP 443`（或 `TCP 80` 仅内网调试） |
-| 后端协议 | `TCP` 转发到实例 **3000**，或先到实例 **443**（由节点 Nginx 再转 127.0.0.1:3000） |
-| 均衡算法 | 轮询 / 加权轮询；连接数高时可加权 |
-| 空闲超时 | **≥ 3600s**（与流式读超时同量级；按云厂商上限尽量调大） |
-| 跨可用区 | 开启，避免单 AZ 故障 |
-
-### TLS 两种常见模式
-
-**模式 A — NLB/TCP 透传 + 节点 Nginx 终结 TLS（推荐）**
+| 组件 | 进程/产物 | 典型端口 | 公网域名示例 |
+|------|-----------|----------|--------------|
+| 转发 | `danmo-relay` | 3000 | `api.example.com` |
+| 管理 API | `danmo-admin` | 3001 | 不直连公网，由 Portal 回源 |
+| 用户 API | `danmo-user` | 3002 | 不直连公网，由 Portal 回源 |
+| 管理 Portal | `apps/admin/dist` | — | `admin.example.com` |
+| 用户 Portal | `apps/user/dist` | — | `user.example.com` |
 
 ```text
-Client ──TLS──► L4:443 ──TCP──► 节点 Nginx:443 ──HTTP──► danmo-relay:3000
+api.example.com     ──► 云厂商「四层 LB」──► relay ECS/CVM × N :3000
+admin.example.com   ──► CDN ──► OSS/COS（静态）+ 回源 /api ──► admin :3001（内网/VPC）
+user.example.com    ──► CDN ──► OSS/COS（静态）+ 回源 /api ──► user  :3002（内网/VPC）
 ```
 
-- 证书用 Let’s Encrypt / 云证书服务，部署在每个节点或 Sidecar Nginx。
-- Nginx 必须：`proxy_buffering off`、长 `proxy_read_timeout`（见 [operations.md — Nginx relay](operations.md#生产部署拆分)）。
+### 实例内进程（systemd）
 
-**模式 B — 直连 relay 端口（内网或测试）**
+在每台计算实例安装 Release 二进制（`make package` 或 GitHub Release），共享 `/opt/danmo/.env`（`DATABASE_URL`、`ENCRYPTION_KEY` 一致）。relay 节点只跑 relay；管理面可 1～2 台跑 admin + user（或拆分）。
 
-```text
-Client ──► L4:3000 ──TCP──► danmo-relay:3000
+```ini
+# /etc/systemd/system/danmo-relay.service
+[Service]
+EnvironmentFile=/opt/danmo/.env
+Environment=PORT=3000
+ExecStart=/opt/danmo/bin/danmo-relay
+Restart=always
 ```
 
-- 无 TLS，仅适合 VPC 内或配合 Service Mesh；公网务必套 TLS。
+admin / user 同理，改 `PORT` 与二进制名。SQLite 库文件需放在**共享 NAS/云盘**或仅单写节点（多 relay 时注意 [operations.md — 扩缩容](operations.md#扩缩容与容量)）。
 
-### 后端实例（relay）
+### 健康检查（各平台控制台填法一致）
 
-- 进程监听 `HOST=0.0.0.0`、`PORT=3000`（默认）。
-- 安全组 / 防火墙：**仅允许 L4 健康探测源与 LB 子网** 访问 3000（或 Nginx 443），勿对公网裸奔 admin/user 端口。
-- 水平扩展：增加后端池成员；注意 SQLite 写放大时换网络库（见 [operations.md — 扩缩容](operations.md#扩缩容与容量)）。
-
-## 后端健康检查
-
-所有二进制均提供：
+应用探针（非 `/v1/models`）：
 
 ```http
-GET /healthz
+GET /healthz  →  200，body: ok
 ```
 
-响应：`200`，body 纯文本 `ok`（无 JSON）。**不要用** `/v1/models` 探活（需 API Key）。
+| 字段 | relay | admin | user |
+|------|-------|-------|------|
+| 协议 | HTTP | HTTP | HTTP |
+| 端口 | 3000 | 3001 | 3002 |
+| 路径 | `/healthz` | `/healthz` | `/healthz` |
+| 间隔 | 5–10s | 10s | 10s |
+| 不健康阈值 | 3 次 | 3 次 | 3 次 |
 
-### 转发池（relay）— 推荐 HTTP 探活
-
-即使监听器是 **L4 TCP**，多数云厂商仍允许对 **后端 IP:端口** 做 HTTP 检查（检查在 LB → 实例之间完成，不改变 L4 转发语义）。
-
-| 参数 | 推荐值 |
-|------|--------|
-| 检查协议 | HTTP |
-| 端口 | `3000`（若 TLS 在 Nginx 且仅暴露 443，可对 Nginx 配置 `location /healthz` 转 3000，或单独开 3000 仅给 LB 探活） |
-| 路径 | `/healthz` |
-| 成功码 | `200` |
-| 间隔 | 5–10s |
-| 超时 | 2–5s |
-| 健康阈值 | 连续 2–3 次成功 |
-| 不健康阈值 | 连续 2–3 次失败 |
-
-**TCP 探活（备选）**：仅 `TCP connect :3000`，只能证明端口打开，**无法**发现进程僵死；生产优先 HTTP `/healthz`。
-
-### 管理 / 用户 API 池
-
-| 服务 | 端口 | 健康路径 |
-|------|------|----------|
-| `danmo-admin` | 3001 | `/healthz` |
-| `danmo-user` | 3002 | `/healthz` |
-
-Admin API 建议 **不对公网开放**，由 Portal 所在七层网关或内网 LB 回源；若必须公网，加 IP 白名单 / WAF。
-
-### 滚动发布与健康
-
-1. 新实例启动并通过 `/healthz` 后再注册到目标组。
-2. 摘流：目标组标记 unhealthy 或权重置 0 → 等待已有长连接结束（relay 可配合较长 `deregistration delay`）。
-3. 先升级 admin/user，再滚动 relay（与 [operations.md — 升级](operations.md#升级与数据库迁移) 一致）。
-
-## Portal 部署
-
-Portal 为 Vite 构建的 **SPA**，生产构建产物在 `apps/admin/dist`、`apps/user/dist`（或 `make package` → `dist/apps/*`）。
-
-### 构建
+### Portal 构建与 Cookie
 
 ```bash
-# 管理 Portal
-cd apps/admin
-npm ci
-VITE_COMPLIANCE_URL=https://your-docs.example.com/compliance.html npm run build
-
-# 用户 Portal
-cd apps/user
-npm ci
-VITE_COMPLIANCE_URL=https://your-docs.example.com/compliance.html npm run build
+cd apps/admin && npm ci && VITE_COMPLIANCE_URL=https://你的合规页 npm run build
+cd apps/user  && npm ci && VITE_COMPLIANCE_URL=https://你的合规页 npm run build
 ```
 
-- 未设置 `VITE_COMPLIANCE_URL` 时，页脚链到仓库默认 [compliance.md](compliance.md) 的 GitHub 地址。
-- 前端请求使用 **相对路径** `/api/...` 且 `credentials: 'include'`（Session Cookie）。**推荐** Portal 域名与 API **同源**，由网关把 `/api` 反代到 admin/user，而不是浏览器跨域访问 `admin-api.example.com`（跨站 Cookie 在 modern 浏览器下易失败）。
-
-### 部署方式 A — 对象存储 + CDN（推荐）
-
-1. 将 `dist/` 上传到桶（S3 / OSS / COS / GCS 等），开启静态网站或 CDN 源站。
-2. **CDN 或源站 Nginx 配置回源规则**：
-   - `/assets/*` → 静态文件，长缓存。
-   - `/api/*` → 回源到 `danmo-admin` 或 `danmo-user`（HTTPS，内网地址）。
-   - 其余路径 → `index.html`（SPA fallback），`index.html` 短缓存或 no-cache。
-3. 环境变量：
-   - `CORS_ORIGINS=https://admin.example.com`（用户 Portal 填 user 域名；逗号分隔多个 Origin）。
-   - 用户中心展示 relay 地址：`PUBLIC_RELAY_URL=https://api.example.com/v1`。
-
-**Nginx 同源示例（管理 Portal 域名）**
-
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name admin.example.com;
-
-    root /var/www/danmo-admin;
-    index index.html;
-
-    location /assets/ {
-        expires 30d;
-        add_header Cache-Control "public, immutable";
-    }
-
-    location /api/ {
-        proxy_pass http://10.0.1.20:3001;   # 内网 admin API
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-}
-```
-
-用户 Portal 同理，`proxy_pass` 指向 `:3002`。
-
-### 部署方式 B — 与 API 同机 Nginx
-
-单台或少量 VM：同一 Nginx 既 `root` 静态目录，又反代 `/api` 与（可选）`/v1` 到 relay。适合小规模；转发量大时仍建议 relay 独立池 + L4。
-
-### 部署方式 C — Kubernetes
-
-| 组件 | 建议 |
-|------|------|
-| relay | `Deployment` + **Service type LoadBalancer**（云 LB 多为 L4）或 `NodePort` + 云 L4；`livenessProbe`/`readinessProbe`：`httpGet` `/healthz` port `3000` |
-| admin / user | `ClusterIP` + Ingress（七层）仅暴露 Portal 域名；或 Portal 静态放对象存储，Ingress 只接 `/api` |
-| 配置 | `Secret` 存 `ENCRYPTION_KEY`、数据库 URL；ConfigMap 存非敏感 env |
-| 存储 | SQLite 需 **ReadWriteOnce** 卷且 **单副本写**；多 relay 副本请规划网络 DB |
-
-Ingress **不适合** 作为 relay 主入口（七层流式限制）；relay 用 LoadBalancer Service 或 L4 chart。
-
-## 云厂商对照（名称速查）
-
-以下为常见产品 **类型** 对照，控制台名称以各云文档为准。
-
-| 能力 | AWS | 阿里云 | 腾讯云 | Google Cloud | Azure |
-|------|-----|--------|--------|--------------|-------|
-| 四层公网 LB | NLB | SLB（传统/NLB 实例） | CLB / 网络型 | External TCP/UDP LB | Azure Load Balancer |
-| 七层 / CDN | ALB + CloudFront | ALB + CDN | CLB 七层 + CDN | Cloud CDN + LB | App Gateway + Front Door |
-| 对象存储静态 | S3 | OSS | COS | GCS | Blob + CDN |
-| 证书 | ACM | 证书服务 | SSL 证书 | Certificate Manager | Key Vault / App Service 证书 |
-
-**Relay 目标组示例逻辑（AWS NLB）**：Target type `instance` → Port `3000` → Health check HTTP `/healthz` → Deregistration delay 300–600s。
-
-## 域名与环境变量对照
-
-| 公网域名 | 后端 | 备注 |
-|----------|------|------|
-| `api.example.com` | L4 → relay `:3000` | SDK / 用户 `PUBLIC_RELAY_URL` |
-| `admin.example.com` | 静态 + `/api` → admin | `CORS_ORIGINS` 含此 Origin |
-| `user.example.com` | 静态 + `/api` → user | 同上 |
+前端使用相对路径 `/api/*` 且 `credentials: 'include'`，**务必**让浏览器看到的 Portal 与 `/api` **同域名**（CDN 路径回源或七层反代），并在 `.env` 设置：
 
 ```bash
-# /opt/danmo/.env（节选）
 CORS_ORIGINS=https://admin.example.com,https://user.example.com
 PUBLIC_RELAY_URL=https://api.example.com/v1
 SEED_DEMO=0
 ```
 
-## 验收清单
+### 转发面为何用四层 LB
 
-- [ ] L4 池仅暴露 relay；`/healthz`  unhealthy 实例会自动摘除
-- [ ] 流式：`curl -N` Chat SSE 经公网域名可持续数分钟不断
-- [ ] Portal 登录后会话保持（同源 `/api`，Cookie `danmo_session`）
-- [ ] 用户中心显示的 API 地址与 `PUBLIC_RELAY_URL` 一致
-- [ ] `make package` 或 CI 构建版本与运行二进制 tag 一致
+Relay 含长连接 SSE/流式；四层 TCP 分发不在网关缓冲 HTTP body。TLS 推荐：**四层 LB TCP:443 → 实例 Nginx:443 终结证书 → `127.0.0.1:3000`**，Nginx 需 `proxy_buffering off`、读超时 ≥3600s（片段见 [operations.md](operations.md#生产部署拆分)）。
+
+---
+
+## 阿里云
+
+### 推荐产品组合
+
+| 用途 | 产品 |
+|------|------|
+| relay 计算 | ECS（或 ACK 节点） |
+| 转发入口 | **NLB（网络型负载均衡）** TCP 监听器 |
+| 管理/用户计算 | ECS（可与 relay 分机部署） |
+| Portal 静态 | **OSS** + **CDN**（或 **DCDN** 全站加速） |
+| 证书 | 数字证书管理服务（部署在 Nginx 或 DCDN） |
+| 数据库文件 | ECS 云盘 / NAS 共享挂载（SQLite） |
+
+### 方案 A：ECS + NLB（转发）+ OSS/CDN（Portal）
+
+**1. VPC 与安全组**
+
+- 创建 VPC，relay ECS 置于多可用区交换机。
+- 安全组 `sg-relay`：入站仅 **NLB 健康检查网段** + **NLB 所在子网** 访问 `TCP 3000`（若 Nginx 443 则放行 443）；**禁止** 0.0.0.0/0 直连 3001/3002。
+- 安全组 `sg-admin`：入站仅 CDN/ALB 回源网段或 VPC 内 `3001/3002`。
+
+**2. NLB 四层转发（`api.example.com`）**
+
+| 配置项 | 值 |
+|--------|-----|
+| 负载均衡类型 | NLB |
+| 监听 | TCP 443（或 TCP 80 内网测试） |
+| 后端服务器组 | 多台 relay ECS |
+| 后端端口 | 443（Nginx）或 3000（直连 relay，仅内网） |
+| 调度 | 加权轮询 |
+| 健康检查 | HTTP，端口 **3000**，路径 **`/healthz`**，正常状态码 200 |
+| 连接空闲超时 | 按控制台上限调大（流式场景） |
+
+DNS：`api.example.com` CNAME 到 NLB 提供的域名。
+
+**3. relay ECS 上 Nginx（443 → 3000）**
+
+- 绑定证书，反代到 `127.0.0.1:3000`，关闭缓冲、拉长超时。
+- NLB 健康检查仍打 **3000** `/healthz`（绕过 TLS 更简单）。
+
+**4. admin / user ECS**
+
+- 各跑 `danmo-admin`、`danmo-user`，监听内网 IP。
+- 无需公网 IP；通过 CDN 回源或内网 ALB 访问。
+
+**5. Portal：OSS + CDN**
+
+| 步骤 | 操作 |
+|------|------|
+| 上传 | 将 `admin/dist`、`user/dist` 分别传到两个 Bucket（或前缀 `admin/`、`user/`） |
+| 域名 | CDN 加速域名 `admin.example.com`、`user.example.com`，源站选 OSS |
+| SPA | OSS 静态页或 CDN **回源规则**：除 `/assets/*` 外 404 回源到 `/index.html`（或使用 CDN 配置「单页应用」类规则） |
+| `/api` 回源 | CDN **路径回源**或 **回源 HOST + 源站**：路径 `/api/*` 指向 **admin/user 源站**（内网 ALB 七层、或带公网 IP 的 ECS 仅允许 CDN 回源 IP） |
+| 缓存 | `/assets/*` 长缓存；`/api/*` **不缓存**；`index.html` 短缓存 |
+
+若 CDN 路径回源配置复杂，可改用 **ALB（七层）** 作为 Portal 域名源站：默认服务器组指向 OSS 静态（或通过 ECS Nginx `root`），转发规则 `/api/*` 指向 admin/user 后端组。
+
+**6. 验收**
+
+- NLB 后端 unhealthy 实例自动摘除。
+- `curl -N https://api.example.com/v1/chat/completions ...` 流式不断。
+- 浏览器登录 admin Portal 后会话保持。
+
+---
+
+## 腾讯云
+
+### 推荐产品组合
+
+| 用途 | 产品 |
+|------|------|
+| relay 计算 | CVM |
+| 转发入口 | **负载均衡 CLB — 网络负载均衡（NetWork LB）** TCP 监听 |
+| Portal | **COS** + **CDN** |
+| 证书 | SSL 证书（托管到 Nginx 或 CDN） |
+
+### 方案：CVM + 网络 CLB + COS/CDN
+
+**1. 网络 CLB（转发）**
+
+| 配置项 | 值 |
+|--------|-----|
+| 实例类型 | 网络负载均衡 |
+| 监听器 | TCP:443 |
+| 绑定 | 多个 relay CVM 私网 IP |
+| 后端端口 | 443（Nginx）或 3000 |
+| 健康检查 | HTTP，检查端口 **3000**，检查路径 **`/healthz`**，HTTP 请求方法 GET |
+| 会话保持 | 关闭（或按需开启源 IP 会话，长连接场景通常单连接已固定后端） |
+
+**2. CVM 安全组**
+
+- `relay-sg`：仅 CLB 健康探测与 CLB 网段访问 3000/443。
+- `portal-api-sg`：仅 CDN 回源地址段访问 3001/3002（参考 [CDN 回源 IP 段文档](https://cloud.tencent.com/document/product/228) 定期更新）。
+
+**3. COS + CDN（Portal）**
+
+| 步骤 | 操作 |
+|------|------|
+| 存储桶 | 私有读写，开启静态网站（索引 `index.html`） |
+| CDN 域名 | 绑定 `admin.example.com` / `user.example.com` |
+| 回源 | 默认 COS；**高级配置** 中对 `/api/` 配置 **源站为 admin/user CVM 内网 CLB（七层）或 CVM IP** |
+| HTTPS | CDN 配置证书，回源协议 HTTPS 或 HTTP（内网） |
+
+**4. 可选：七层 CLB 统一 Portal**
+
+单 CLB 多监听器：443 上 `admin.example.com` → 静态 CVM（Nginx root）+ location `/api/` → 3001；`user.example.com` 同理。COS 仅作构建物发布介质，由流水线同步到 CVM。
+
+---
+
+## 华为云
+
+### 推荐产品组合
+
+| 用途 | 产品 |
+|------|------|
+| relay | ECS |
+| 转发入口 | **ELB 独享型 / 共享型 — TCP 监听器**（四层） |
+| Portal | **OBS** + **CDN** |
+| 证书 | 云证书服务（CCM） |
+
+### 方案：ECS + ELB（TCP）+ OBS/CDN
+
+**1. ELB 四层**
+
+| 配置项 | 值 |
+|--------|-----|
+| 前端协议/端口 | TCP 443 |
+| 后端组 | relay ECS，端口 443 或 3000 |
+| 健康检查 | **HTTP**，端口 **3000**，URL **`/healthz`**，期望 2xx |
+| 跨AZ | 开启 |
+
+**2. 安全组**
+
+- 入站：ELB 子网 → ECS 3000/443；禁止公网直连 admin/user。
+
+**3. OBS + CDN**
+
+- 上传构建产物到 OBS；CDN 加速域名指向 OBS。
+- 配置 **回源 URL 改写 / 多源站**：`/api/*` 回源至 admin/user ECS 私网地址或后端 ELB（七层 HTTP/HTTPS 监听器）。
+- SPA：`错误码 404` 回源 OBS 的 `index.html`（按华为云 CDN 控制台「自定义错误页面」配置）。
+
+---
+
+## 火山引擎（Volcengine）
+
+### 推荐产品组合
+
+| 用途 | 产品 |
+|------|------|
+| relay | 云服务器 ECS |
+| 转发入口 | **负载均衡 CLB — 四层（TCP/UDP）** |
+| Portal | **TOS** + **CDN** |
+
+### 方案：ECS + 四层 CLB + TOS/CDN
+
+**1. 四层 CLB**
+
+| 配置项 | 值 |
+|--------|-----|
+| 监听协议 | TCP |
+| 端口 | 443 |
+| 后端服务器 | relay ECS 实例组 |
+| 健康检查 | HTTP，`/healthz`，端口 **3000** |
+
+**2. TOS + CDN**
+
+- 桶开启静态网站；CDN 域名 CNAME。
+- 「回源配置」中为路径 `/api/` 指定独立源站（admin/user 内网 ECS 或内网 CLB 七层）。
+- 流式 API 域名 `api.example.com` 解析到 **四层 CLB**，不要经 CDN（避免缓存与断流）。
+
+---
+
+## AWS
+
+### 推荐产品组合
+
+| 用途 | 产品 |
+|------|------|
+| relay | EC2 或 EKS worker |
+| 转发入口 | **Network Load Balancer (NLB)** |
+| Portal | **S3** + **CloudFront** |
+| 证书 | **ACM**（CloudFront / ALB） |
+
+### 方案：EC2 + NLB + CloudFront
+
+**1. NLB**
+
+| 配置项 | 值 |
+|--------|-----|
+| Scheme | internet-facing |
+| Listener | TCP:443 |
+| Target group | Instance type，port **3000**（或 443→Nginx） |
+| Health check protocol | HTTP |
+| Health check path | `/healthz` |
+| Success codes | 200 |
+| Deregistration delay | 300–600s（便于流式连接 drain） |
+
+**2. EC2 安全组**
+
+- `relay-sg`：Inbound 3000/443 **only from NLB node SG**（使用 [NLB 作为 target 时参考 AWS 文档配置 health check 与 client IP](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/load-balancer-targets.html)）。
+
+**3. CloudFront + S3（Portal）**
+
+| 行为 | 配置 |
+|------|------|
+| Origin 1 | S3 bucket（OAC），默认行为，静态资源 |
+| Origin 2 | admin/user **内网 ALB** 或 EC2（仅安全组允许 CloudFront 前缀列表或 VPC Origin） |
+| Cache behavior | `/api/*` → Origin 2，**CachingDisabled**，允许所有 HTTP 方法 |
+| Default | `/*` → S3，`index.html` 用 CloudFront Function 或 Custom error 403→200 返回 `/index.html`（SPA） |
+| API 域名 | 单独 `api.example.com` → NLB，**不要**走 CloudFront |
+
+**4. EKS 变体（简述）**
+
+- relay：`Service type=LoadBalancer`（provision NLB），`readinessProbe` `httpGet: /healthz:3000`。
+- admin/user：`ClusterIP` + Ingress（ALB Ingress Controller）供 CloudFront VPC Origin 或内网 ALB 回源。
+
+---
+
+## Google Cloud（GCP）
+
+| 用途 | 产品 |
+|------|------|
+| relay | Compute Engine MIG |
+| 四层 LB | **External TCP/UDP Network Load Balancing** |
+| Portal | **Cloud Storage** + **Cloud CDN**（后端 bucket 或 LB） |
+| 七层 Portal `/api` | **External Application Load Balancer** URL map：`/api/*` → admin/user backend service |
+
+**Network LB**：Health check 选 HTTP，port 3000，request path `/healthz`。Forwarding rule TCP 443 → relay MIG。
+
+**Portal**：Cloud CDN 启用在 ALB 或 bucket 上；`/api/*` 指向 serverless NEG 或 GCE 实例组（admin/user）。
+
+---
+
+## Microsoft Azure
+
+| 用途 | 产品 |
+|------|------|
+| relay | Virtual Machine Scale Set (VMSS) |
+| 四层 LB | **Azure Load Balancer**（Standard SKU）TCP 443 |
+| 健康探测 | HTTP `/healthz` 需 **Load Balancer 规则 + 或 VM 内 Nginx**；Standard LB 支持 HTTP probe 到 port 3000 |
+| Portal | **Storage Static Website** + **Azure Front Door** 或 **Application Gateway** |
+
+Front Door：`/api/*` route 到 admin/user 源（Private Link 或公网 IP 限制）；静态 route 到 Blob static website。`api.example.com` 用 **Load Balancer** 公网 IP 指向 relay VMSS。
+
+---
+
+## 平台选型速查
+
+| 平台 | 四层转发产品 | 静态 Portal | 路径 `/api` 回源常见做法 |
+|------|--------------|-------------|---------------------------|
+| 阿里云 | NLB TCP | OSS + CDN | CDN 路径回源 / DCDN / ALB 七层 |
+| 腾讯云 | 网络 CLB TCP | COS + CDN | CDN 多源站 / 七层 CLB |
+| 华为云 | ELB TCP | OBS + CDN | CDN 回源到内网 ELB/ECS |
+| 火山引擎 | CLB 四层 | TOS + CDN | CDN 独立源站 |
+| AWS | NLB | S3 + CloudFront | CloudFront 第二 Origin |
+| GCP | Network LB | GCS + CDN | ALB URL map |
+| Azure | Load Balancer | Blob + Front Door | Front Door route |
+
+## 验收清单（各平台通用）
+
+- [ ] 仅 **四层 LB** 对公网暴露 relay；3001/3002 不对 0.0.0.0/0 开放
+- [ ] 目标组/后端组 HTTP 探活 **`/healthz`** 生效
+- [ ] `api.example.com` **不经过** CDN
+- [ ] Portal 登录 Cookie 正常（同源 `/api`）
+- [ ] `PUBLIC_RELAY_URL` 与 NLB/CLB 域名一致
+- [ ] 合规页 `VITE_COMPLIANCE_URL` 已按 [compliance.md](compliance.md) 配置
 
 ## 相关文档
 
-- [operations.md](operations.md) — 环境变量、systemd、备份、排障
-- [compliance.md](compliance.md) — 部署前合规与 `VITE_COMPLIANCE_URL`
-- [channel-health.md](channel-health.md) — relay 渠道熔断（与 LB 健康检查无关，勿混淆）
+- [operations.md](operations.md) — 环境变量、备份、升级、Nginx relay 片段
+- [compliance.md](compliance.md) — 部署前合规
+- [channel-health.md](channel-health.md) — relay 进程内渠道熔断（非 LB 探活）

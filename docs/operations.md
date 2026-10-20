@@ -10,7 +10,7 @@
 | `CB_*` / `RL_*`、选路与熔断日志 | [channel-health.md](channel-health.md) |
 | 与同类项目对比 | [comparison.md](comparison.md) |
 | 合法授权、可接受使用与责任边界 | [compliance.md](compliance.md) |
-| **云平台：L4 转发、健康检查、Portal/CDN** | [cloud-deployment.md](cloud-deployment.md) |
+| **云厂商部署方案（NLB/CLB/ELB + OSS/COS + CDN）** | [cloud-deployment.md](cloud-deployment.md) |
 | 本地开发与 Makefile | [README.md](../README.md) |
 | 环境变量模板 | [`.env.example`](../.env.example) |
 
@@ -67,7 +67,7 @@ make check   # fmt + clippy + test
 
 ## 生产部署（拆分）
 
-公有云场景（四层 LB、目标组 `/healthz` 探活、对象存储 + CDN 部署 Portal）见 **[cloud-deployment.md](cloud-deployment.md)**。
+公有云按厂商分步方案（阿里云 NLB、腾讯云网络 CLB、华为 ELB、火山 CLB、AWS NLB + CloudFront 等）见 **[cloud-deployment.md](cloud-deployment.md)**。
 
 1. 将 `dist/bin` 安装到统一路径（如 `/opt/danmo/bin`），`.env` 放在 `/opt/danmo/.env`。
 2. 三组 systemd（或容器）进程共享同一 `EnvironmentFile`，仅 `PORT` 与 `ExecStart` 二进制不同。
