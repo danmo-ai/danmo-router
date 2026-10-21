@@ -254,3 +254,39 @@ pub struct OverviewStats {
     pub failed_requests: i64,
     pub today_quota: i64,
 }
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UsageBucket {
+    pub requests: i64,
+    pub success_requests: i64,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub reasoning_tokens: i64,
+    pub quota: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UsageDay {
+    pub day: String,
+    #[serde(flatten)]
+    pub stats: UsageBucket,
+}
+
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct UsageByModel {
+    pub model: String,
+    pub requests: i64,
+    pub quota: i64,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UsageReport {
+    pub totals: UsageBucket,
+    pub series: Vec<UsageDay>,
+    pub by_model: Vec<UsageByModel>,
+    pub retention_days: i64,
+}

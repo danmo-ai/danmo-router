@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
+import { Modal, statusLabel } from '../shared'
 
 const EMPTY = {
   name: 'default',
@@ -14,6 +15,7 @@ export function TokensPage() {
   const [tokens, setTokens] = useState<any[]>([])
   const [form, setForm] = useState({ ...EMPTY })
   const [editing, setEditing] = useState<number | null>(null)
+  const [open, setOpen] = useState(false)
   const [createdKey, setCreatedKey] = useState('')
   const [error, setError] = useState('')
 
@@ -35,90 +37,34 @@ export function TokensPage() {
     }
   }
 
+  function closeForm() {
+    setOpen(false)
+    setEditing(null)
+    setForm({ ...EMPTY })
+    setError('')
+  }
+
   return (
     <div>
-      <h1>API 令牌</h1>
-      {error && <div className="error">{error}</div>}
+      <div className="page-header">
+        <h1>API 令牌</h1>
+        <button
+          type="button"
+          onClick={() => {
+            setEditing(null)
+            setForm({ ...EMPTY })
+            setError('')
+            setOpen(true)
+          }}
+        >
+          新增令牌
+        </button>
+      </div>
       {createdKey && (
         <div className="card success">
           新令牌（仅显示一次）：<code>{createdKey}</code>
         </div>
       )}
-      <form
-        className="card form-grid"
-        onSubmit={async (e) => {
-          e.preventDefault()
-          setError('')
-          try {
-            if (editing !== null) {
-              await api.updateToken(editing, payload())
-              setEditing(null)
-            } else {
-              const created = await api.createToken(payload())
-              setCreatedKey(created.key)
-            }
-            setForm({ ...EMPTY })
-            await refresh()
-          } catch (err: any) {
-            setError(err.message)
-          }
-        }}
-      >
-        <input
-          value={form.name}
-          onChange={(e) => setForm({ ...form, name: e.target.value })}
-          placeholder="令牌名称"
-          required
-        />
-        <label className="checkbox">
-          <input
-            type="checkbox"
-            checked={form.unlimited_quota}
-            onChange={(e) => setForm({ ...form, unlimited_quota: e.target.checked })}
-          />
-          无限额度（仍受账户额度限制）
-        </label>
-        <input
-          type="number"
-          placeholder="令牌额度"
-          value={form.remain_quota}
-          disabled={form.unlimited_quota}
-          onChange={(e) => setForm({ ...form, remain_quota: Number(e.target.value) })}
-        />
-        <label>
-          过期时间（可空）
-          <input
-            type="datetime-local"
-            value={form.expired_at}
-            onChange={(e) => setForm({ ...form, expired_at: e.target.value })}
-          />
-        </label>
-        <input
-          value={form.models}
-          onChange={(e) => setForm({ ...form, models: e.target.value })}
-          placeholder="模型白名单，逗号分隔，空 = 全部"
-        />
-        <input
-          value={form.group_name}
-          onChange={(e) => setForm({ ...form, group_name: e.target.value })}
-          placeholder="分组覆盖（空 = 用账户分组）"
-        />
-        <div className="actions wide">
-          <button type="submit">{editing !== null ? '保存令牌' : '创建令牌'}</button>
-          {editing !== null && (
-            <button
-              type="button"
-              className="ghost"
-              onClick={() => {
-                setEditing(null)
-                setForm({ ...EMPTY })
-              }}
-            >
-              取消
-            </button>
-          )}
-        </div>
-      </form>
       <table>
         <thead>
           <tr>
@@ -137,7 +83,7 @@ export function TokensPage() {
             <tr key={t.id}>
               <td>{t.name}</td>
               <td>{t.key_prefix}...</td>
-              <td>{t.status}</td>
+              <td>{statusLabel(t.status)}</td>
               <td>{t.unlimited_quota ? '无限' : t.remain_quota}</td>
               <td>{t.models || '全部'}</td>
               <td>{t.group_name || '账户'}</td>
@@ -147,6 +93,7 @@ export function TokensPage() {
                   onClick={() => {
                     setEditing(t.id)
                     setCreatedKey('')
+                    setError('')
                     setForm({
                       name: t.name,
                       unlimited_quota: Boolean(t.unlimited_quota),
@@ -155,6 +102,7 @@ export function TokensPage() {
                       models: t.models || '',
                       group_name: t.group_name || '',
                     })
+                    setOpen(true)
                   }}
                 >
                   编辑
@@ -181,6 +129,84 @@ export function TokensPage() {
           ))}
         </tbody>
       </table>
+      {open && (
+        <Modal title={editing !== null ? '编辑令牌' : '新增令牌'} onClose={closeForm}>
+          {error && <div className="error">{error}</div>}
+          <form
+            className="form-stack"
+            onSubmit={async (e) => {
+              e.preventDefault()
+              setError('')
+              try {
+                if (editing !== null) {
+                  await api.updateToken(editing, payload())
+                } else {
+                  const created = await api.createToken(payload())
+                  setCreatedKey(created.key)
+                }
+                closeForm()
+                await refresh()
+              } catch (err: any) {
+                setError(err.message)
+              }
+            }}
+          >
+            <label>
+              令牌名称
+              <input
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                required
+              />
+            </label>
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                checked={form.unlimited_quota}
+                onChange={(e) => setForm({ ...form, unlimited_quota: e.target.checked })}
+              />
+              无限额度（仍受账户额度限制）
+            </label>
+            <label>
+              令牌额度
+              <input
+                type="number"
+                value={form.remain_quota}
+                disabled={form.unlimited_quota}
+                onChange={(e) => setForm({ ...form, remain_quota: Number(e.target.value) })}
+              />
+            </label>
+            <label>
+              过期时间（可空）
+              <input
+                type="datetime-local"
+                value={form.expired_at}
+                onChange={(e) => setForm({ ...form, expired_at: e.target.value })}
+              />
+            </label>
+            <label>
+              模型白名单（逗号分隔，空 = 全部）
+              <input
+                value={form.models}
+                onChange={(e) => setForm({ ...form, models: e.target.value })}
+              />
+            </label>
+            <label>
+              分组覆盖（空 = 用账户分组）
+              <input
+                value={form.group_name}
+                onChange={(e) => setForm({ ...form, group_name: e.target.value })}
+              />
+            </label>
+            <div className="form-actions">
+              <button type="submit">保存</button>
+              <button type="button" className="ghost" onClick={closeForm}>
+                取消
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
     </div>
   )
 }

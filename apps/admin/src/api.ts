@@ -78,6 +78,7 @@ export const api = {
       body: JSON.stringify({ group_name, ratio }),
     }),
   logs: (q: LogQuery = {}) => request<any[]>(logPath('/api/admin/logs', q)),
+  usage: (q: LogQuery = {}) => request<UsageReport>(logPath('/api/admin/usage', q)),
   testChannel: (id: number) =>
     request<any>(`/api/admin/channels/${id}/test`, { method: 'POST' }),
   resetPassword: (id: number, password: string) =>
@@ -103,22 +104,53 @@ export const api = {
     request(`/api/admin/redemptions/${id}`, { method: 'DELETE' }),
 }
 
+export type UsageBucket = {
+  requests: number
+  success_requests: number
+  prompt_tokens: number
+  completion_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  reasoning_tokens: number
+  quota: number
+}
+
+export type UsageReport = {
+  totals: UsageBucket
+  series: ({ day: string } & UsageBucket)[]
+  by_model: {
+    model: string
+    requests: number
+    quota: number
+    prompt_tokens: number
+    completion_tokens: number
+  }[]
+  retention_days: number
+}
+
 export type LogQuery = {
   limit?: number
   offset?: number
-  user_id?: string
+  user_id?: string | number
   model?: string
   status?: string
-  channel_id?: string
+  channel_id?: string | number
+  token_id?: string | number
+  start?: string
+  end?: string
 }
 
 function logPath(base: string, q: LogQuery) {
   const p = new URLSearchParams()
-  p.set('limit', String(q.limit ?? 50))
-  p.set('offset', String(q.offset ?? 0))
-  if (q.user_id) p.set('user_id', q.user_id)
+  if (q.limit !== undefined) p.set('limit', String(q.limit))
+  if (q.offset !== undefined) p.set('offset', String(q.offset))
+  if (q.user_id) p.set('user_id', String(q.user_id))
   if (q.model) p.set('model', q.model)
   if (q.status) p.set('status', q.status)
-  if (q.channel_id) p.set('channel_id', q.channel_id)
-  return `${base}?${p.toString()}`
+  if (q.channel_id) p.set('channel_id', String(q.channel_id))
+  if (q.token_id) p.set('token_id', String(q.token_id))
+  if (q.start) p.set('start', q.start)
+  if (q.end) p.set('end', q.end)
+  const qs = p.toString()
+  return qs ? `${base}?${qs}` : base
 }

@@ -8,6 +8,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../migrations/mysql/002_dialect.sql"),
     include_str!("../../migrations/mysql/003_channel_models.sql"),
     include_str!("../../migrations/mysql/004_redemptions.sql"),
+    include_str!("../../migrations/mysql/005_log_daily.sql"),
 ];
 
 const ER_TABLE_EXISTS: u16 = 1050;

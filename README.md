@@ -38,29 +38,30 @@ User UI  ──────► danmo-user  × 1..N
 
 ## 界面
 
-管理后台（`http://localhost:5173`，默认 `admin` / `admin123`）：
+示例数据。点图可看原尺寸。管理后台 `admin` / `admin123`，用户中心 `demo` / `demo1234`。
 
-![概览](docs/images/admin-overview.png)
+| 管理端 | 用户端 |
+| --- | --- |
+| [![管理端界面](docs/screenshots/admin.gif)](docs/screenshots/admin.gif) | [![用户端界面](docs/screenshots/user.gif)](docs/screenshots/user.gif) |
 
-![渠道](docs/images/admin-channels.png)
+<details>
+<summary>分屏静态图</summary>
 
-![用户](docs/images/admin-users.png)
+| 概览 | 渠道 |
+| --- | --- |
+| [![概览](docs/screenshots/admin-overview.png)](docs/screenshots/admin-overview.png) | [![渠道](docs/screenshots/admin-channels.png)](docs/screenshots/admin-channels.png) |
+| **新增渠道** | **用户** |
+| [![新增渠道](docs/screenshots/admin-channel-form.png)](docs/screenshots/admin-channel-form.png) | [![用户](docs/screenshots/admin-users.png)](docs/screenshots/admin-users.png) |
+| **价格** | **兑换码** |
+| [![价格](docs/screenshots/admin-prices.png)](docs/screenshots/admin-prices.png) | [![兑换码](docs/screenshots/admin-redemptions.png)](docs/screenshots/admin-redemptions.png) |
+| **调用日志** | **账户概览** |
+| [![调用日志](docs/screenshots/admin-logs.png)](docs/screenshots/admin-logs.png) | [![账户概览](docs/screenshots/user-overview.png)](docs/screenshots/user-overview.png) |
+| **API 令牌** | **可用模型** |
+| [![API 令牌](docs/screenshots/user-tokens.png)](docs/screenshots/user-tokens.png) | [![可用模型](docs/screenshots/user-models.png)](docs/screenshots/user-models.png) |
+| **我的调用日志** | |
+| [![我的调用日志](docs/screenshots/user-logs.png)](docs/screenshots/user-logs.png) | |
 
-![模型价格](docs/images/admin-prices.png)
-
-![兑换码](docs/images/admin-redemptions.png)
-
-![调用日志](docs/images/admin-logs.png)
-
-用户中心（`http://localhost:5174`，示例账号 `demo` / `demo1234`）：
-
-![账户概览](docs/images/user-overview.png)
-
-![API 令牌](docs/images/user-tokens.png)
-
-![可用模型](docs/images/user-models.png)
-
-![我的调用日志](docs/images/user-logs.png)
+</details>
 
 ## 转发
 

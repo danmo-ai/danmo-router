@@ -31,6 +31,7 @@ pub fn router(state: UserState) -> Router {
             put(update_token).delete(delete_token),
         )
         .route("/api/user/logs", get(list_logs))
+        .route("/api/user/usage", get(usage))
         .route("/api/user/redeem", post(redeem))
         .route("/api/user/password", post(change_password))
         .route("/api/user/models", get(list_models))
@@ -272,9 +273,11 @@ struct LogQuery {
     limit: i64,
     #[serde(default)]
     offset: i64,
+    token_id: Option<i64>,
     model: Option<String>,
     status: Option<String>,
-    channel_id: Option<i64>,
+    start: Option<String>,
+    end: Option<String>,
 }
 
 fn default_limit() -> i64 {
@@ -290,15 +293,46 @@ async fn list_logs(
         &state.pool,
         &log_svc::LogQuery {
             user_id: Some(user.id),
+            token_id: q.token_id,
+            channel_id: None,
             model: q.model,
             status: q.status,
-            channel_id: q.channel_id,
+            start: q.start,
+            end: q.end,
             limit: q.limit,
             offset: q.offset,
         },
     )
     .await?;
     Ok(Json(json!({ "success": true, "data": logs })))
+}
+
+#[derive(Deserialize)]
+struct UsageQuery {
+    token_id: Option<i64>,
+    model: Option<String>,
+    status: Option<String>,
+    start: Option<String>,
+    end: Option<String>,
+}
+
+async fn usage(
+    State(state): State<UserState>,
+    AuthUser(user): AuthUser,
+    Query(q): Query<UsageQuery>,
+) -> ApiResult<Json<Value>> {
+    let filter = log_svc::LogFilter {
+        user_id: Some(user.id),
+        token_id: q.token_id,
+        channel_id: None,
+        model: q.model,
+        status: q.status,
+        start: q.start,
+        end: q.end,
+    };
+    let report =
+        log_svc::usage_report(&state.pool, &filter, state.config.log_retention_days).await?;
+    Ok(Json(json!({ "success": true, "data": report })))
 }
 
 #[derive(Deserialize)]

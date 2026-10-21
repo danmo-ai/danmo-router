@@ -59,6 +59,7 @@ export const api = {
   deleteToken: (id: number) =>
     request(`/api/user/tokens/${id}`, { method: 'DELETE' }),
   logs: (q: LogQuery = {}) => request<any[]>(logPath('/api/user/logs', q)),
+  usage: (q: LogQuery = {}) => request<UsageReport>(logPath('/api/user/usage', q)),
   updateToken: (id: number, body: any) =>
     request(`/api/user/tokens/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   redeem: (code: string) =>
@@ -75,20 +76,49 @@ export const api = {
   meta: () => request<{ relay_base_url: string }>('/api/user/meta'),
 }
 
+export type UsageBucket = {
+  requests: number
+  success_requests: number
+  prompt_tokens: number
+  completion_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  reasoning_tokens: number
+  quota: number
+}
+
+export type UsageReport = {
+  totals: UsageBucket
+  series: ({ day: string } & UsageBucket)[]
+  by_model: {
+    model: string
+    requests: number
+    quota: number
+    prompt_tokens: number
+    completion_tokens: number
+  }[]
+  retention_days: number
+}
+
 export type LogQuery = {
   limit?: number
   offset?: number
   model?: string
   status?: string
-  channel_id?: string
+  token_id?: string | number
+  start?: string
+  end?: string
 }
 
 function logPath(base: string, q: LogQuery) {
   const p = new URLSearchParams()
-  p.set('limit', String(q.limit ?? 50))
-  p.set('offset', String(q.offset ?? 0))
+  if (q.limit !== undefined) p.set('limit', String(q.limit))
+  if (q.offset !== undefined) p.set('offset', String(q.offset))
   if (q.model) p.set('model', q.model)
   if (q.status) p.set('status', q.status)
-  if (q.channel_id) p.set('channel_id', q.channel_id)
-  return `${base}?${p.toString()}`
+  if (q.token_id) p.set('token_id', String(q.token_id))
+  if (q.start) p.set('start', q.start)
+  if (q.end) p.set('end', q.end)
+  const qs = p.toString()
+  return qs ? `${base}?${qs}` : base
 }

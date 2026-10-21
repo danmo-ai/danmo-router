@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
+import { Modal, statusLabel } from '../shared'
 
 export function RedemptionsPage() {
   const [rows, setRows] = useState<any[]>([])
@@ -9,6 +10,7 @@ export function RedemptionsPage() {
   const [created, setCreated] = useState<any[]>([])
   const [error, setError] = useState('')
   const [copied, setCopied] = useState('')
+  const [creating, setCreating] = useState(false)
 
   async function refresh() {
     setRows(await api.redemptions())
@@ -17,10 +19,20 @@ export function RedemptionsPage() {
     refresh().catch(console.error)
   }, [])
 
+  function closeCreate() {
+    setCreating(false)
+    setError('')
+  }
+
   return (
     <div>
-      <h1>兑换码</h1>
-      {error && <div className="error">{error}</div>}
+      <div className="page-header">
+        <h1>兑换码</h1>
+        <button type="button" onClick={() => setCreating(true)}>
+          生成兑换码
+        </button>
+      </div>
+      {error && !creating && <div className="error">{error}</div>}
       {created.length > 0 && (
         <div className="card success">
           <div>新兑换码（已写入列表，可随时复制未使用的码）：</div>
@@ -43,46 +55,6 @@ export function RedemptionsPage() {
           {copied && <span className="muted">{copied}</span>}
         </div>
       )}
-      <form
-        className="card form-grid"
-        onSubmit={async (e) => {
-          e.preventDefault()
-          setError('')
-          setCopied('')
-          try {
-            const made = await api.createRedemptions({ name, quota, count })
-            setCreated(made)
-            setName('')
-            await refresh()
-          } catch (err: any) {
-            setError(err.message)
-          }
-        }}
-      >
-        <input
-          placeholder="名称（可选）"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-        />
-        <input
-          type="number"
-          min={1}
-          placeholder="额度"
-          value={quota}
-          onChange={(e) => setQuota(Number(e.target.value))}
-          required
-        />
-        <input
-          type="number"
-          min={1}
-          max={100}
-          placeholder="数量"
-          value={count}
-          onChange={(e) => setCount(Number(e.target.value))}
-          required
-        />
-        <button type="submit">生成</button>
-      </form>
       <table>
         <thead>
           <tr>
@@ -103,7 +75,7 @@ export function RedemptionsPage() {
               <td>{r.name || '-'}</td>
               <td className="mono">{r.code}</td>
               <td>{r.quota}</td>
-              <td>{r.status === 'unused' ? '未使用' : '已使用'}</td>
+              <td>{statusLabel(r.status)}</td>
               <td>{r.redeemed_by ?? '-'}</td>
               <td>{r.redeemed_at || r.created_at}</td>
               <td>
@@ -128,6 +100,60 @@ export function RedemptionsPage() {
           ))}
         </tbody>
       </table>
+      {creating && (
+        <Modal title="生成兑换码" onClose={closeCreate}>
+          {error && <div className="error">{error}</div>}
+          <form
+            className="form-stack"
+            onSubmit={async (e) => {
+              e.preventDefault()
+              setError('')
+              setCopied('')
+              try {
+                const made = await api.createRedemptions({ name, quota, count })
+                setCreated(made)
+                setName('')
+                closeCreate()
+                await refresh()
+              } catch (err: any) {
+                setError(err.message)
+              }
+            }}
+          >
+            <label>
+              名称（可选）
+              <input value={name} onChange={(e) => setName(e.target.value)} />
+            </label>
+            <label>
+              额度
+              <input
+                type="number"
+                min={1}
+                value={quota}
+                onChange={(e) => setQuota(Number(e.target.value))}
+                required
+              />
+            </label>
+            <label>
+              数量
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={count}
+                onChange={(e) => setCount(Number(e.target.value))}
+                required
+              />
+            </label>
+            <div className="form-actions">
+              <button type="submit">生成</button>
+              <button type="button" className="ghost" onClick={closeCreate}>
+                取消
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
     </div>
   )
 }

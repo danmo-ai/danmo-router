@@ -20,6 +20,7 @@ use serde_json::{json, Value};
 use time::Duration;
 
 pub fn router(state: AdminState) -> Router {
+    log_svc::spawn_archive_task(state.pool.clone(), state.config.log_retention_days);
     Router::new()
         .route("/api/admin/login", post(login))
         .route("/api/admin/logout", post(logout))
@@ -66,6 +67,7 @@ pub fn router(state: AdminState) -> Router {
             get(list_group_ratios).put(upsert_group_ratio),
         )
         .route("/api/admin/logs", get(list_logs))
+        .route("/api/admin/usage", get(usage))
         .with_state(state)
 }
 
@@ -482,13 +484,28 @@ struct LogQuery {
     #[serde(default)]
     offset: i64,
     user_id: Option<i64>,
+    token_id: Option<i64>,
+    channel_id: Option<i64>,
     model: Option<String>,
     status: Option<String>,
-    channel_id: Option<i64>,
+    start: Option<String>,
+    end: Option<String>,
 }
 
 fn default_limit() -> i64 {
     50
+}
+
+fn admin_log_filter(q: &LogQuery) -> log_svc::LogFilter {
+    log_svc::LogFilter {
+        user_id: q.user_id,
+        token_id: q.token_id,
+        channel_id: q.channel_id,
+        model: q.model.clone(),
+        status: q.status.clone(),
+        start: q.start.clone(),
+        end: q.end.clone(),
+    }
 }
 
 async fn list_logs(
@@ -496,19 +513,53 @@ async fn list_logs(
     _admin: AdminUser,
     Query(q): Query<LogQuery>,
 ) -> ApiResult<Json<Value>> {
+    let filter = admin_log_filter(&q);
     let logs = log_svc::list_logs(
         &state.pool,
         &log_svc::LogQuery {
-            user_id: q.user_id,
-            model: q.model,
-            status: q.status,
-            channel_id: q.channel_id,
+            user_id: filter.user_id,
+            token_id: filter.token_id,
+            channel_id: filter.channel_id,
+            model: filter.model,
+            status: filter.status,
+            start: filter.start,
+            end: filter.end,
             limit: q.limit,
             offset: q.offset,
         },
     )
     .await?;
     Ok(Json(json!({ "success": true, "data": logs })))
+}
+
+#[derive(Deserialize)]
+struct UsageQuery {
+    user_id: Option<i64>,
+    token_id: Option<i64>,
+    channel_id: Option<i64>,
+    model: Option<String>,
+    status: Option<String>,
+    start: Option<String>,
+    end: Option<String>,
+}
+
+async fn usage(
+    State(state): State<AdminState>,
+    _admin: AdminUser,
+    Query(q): Query<UsageQuery>,
+) -> ApiResult<Json<Value>> {
+    let filter = log_svc::LogFilter {
+        user_id: q.user_id,
+        token_id: q.token_id,
+        channel_id: q.channel_id,
+        model: q.model,
+        status: q.status,
+        start: q.start,
+        end: q.end,
+    };
+    let report =
+        log_svc::usage_report(&state.pool, &filter, state.config.log_retention_days).await?;
+    Ok(Json(json!({ "success": true, "data": report })))
 }
 
 async fn test_channel(

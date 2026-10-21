@@ -9,6 +9,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../migrations/sqlite/002_dialect.sql"),
     include_str!("../../migrations/sqlite/003_channel_models.sql"),
     include_str!("../../migrations/sqlite/004_redemptions.sql"),
+    include_str!("../../migrations/sqlite/005_log_daily.sql"),
 ];
 
 impl SqlEngine for Sqlite {

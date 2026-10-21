@@ -1,8 +1,48 @@
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { FormEvent, ReactNode } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { api } from './api'
 import { ComplianceAuthNotice, ComplianceSiteFooter } from './compliance'
+
+export function Modal({
+  title,
+  onClose,
+  children,
+}: {
+  title: string
+  onClose: () => void
+  children: ReactNode
+}) {
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return createPortal(
+    <div className="modal-backdrop" onClick={onClose} role="presentation">
+      <div
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="modal-header">
+          <h2>{title}</h2>
+          <button type="button" className="icon-close" onClick={onClose} aria-label="取消">
+            ×
+          </button>
+        </div>
+        <div className="modal-body">{children}</div>
+      </div>
+    </div>,
+    document.body,
+  )
+}
 
 export function useAuth() {
   const [user, setUser] = useState<any | null | undefined>(undefined)
@@ -163,3 +203,21 @@ export function Layout({
 }
 
 export const PAGE_SIZE = 50
+
+export function statusLabel(status: string) {
+  switch (status) {
+    case 'success':
+      return '成功'
+    case 'error':
+      return '错误'
+    case 'billing_failed':
+      return '计费失败'
+    case 'enabled':
+    case 'active':
+      return '启用'
+    case 'disabled':
+      return '禁用'
+    default:
+      return status
+  }
+}

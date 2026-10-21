@@ -1,70 +1,228 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import type { FormEvent } from 'react'
 import { api } from '../api'
-import { PAGE_SIZE } from '../shared'
+import type { UsageReport } from '../api'
+import { PAGE_SIZE, statusLabel } from '../shared'
+import { BarChart, ModelBars, StackedTokenChart, fmtNum } from './charts'
+
+type LogFilters = {
+  start: string
+  end: string
+  model: string
+  token_id: string
+  status: string
+  user_id: string
+  channel_id: string
+}
+
+function utcDay(d: Date = new Date()) {
+  return d.toISOString().slice(0, 10)
+}
+
+function daysAgo(n: number) {
+  const d = new Date()
+  d.setUTCDate(d.getUTCDate() - n)
+  return utcDay(d)
+}
+
+function defaultFilters(days = 6): LogFilters {
+  return {
+    start: daysAgo(days),
+    end: utcDay(),
+    model: '',
+    token_id: '',
+    status: '',
+    user_id: '',
+    channel_id: '',
+  }
+}
+
+function filterParams(f: LogFilters) {
+  return {
+    start: f.start || undefined,
+    end: f.end || undefined,
+    model: f.model || undefined,
+    token_id: f.token_id ? Number(f.token_id) : undefined,
+    status: f.status || undefined,
+    user_id: f.user_id ? Number(f.user_id) : undefined,
+    channel_id: f.channel_id ? Number(f.channel_id) : undefined,
+  }
+}
 
 export function LogsPage() {
+  const [filters, setFilters] = useState<LogFilters>(() => defaultFilters(6))
+  const [draft, setDraft] = useState<LogFilters>(() => defaultFilters(6))
   const [logs, setLogs] = useState<any[]>([])
-  const [userId, setUserId] = useState('')
-  const [model, setModel] = useState('')
-  const [channelId, setChannelId] = useState('')
-  const [status, setStatus] = useState('')
+  const [usage, setUsage] = useState<UsageReport | null>(null)
   const [offset, setOffset] = useState(0)
   const [error, setError] = useState('')
-
-  async function load(nextOffset: number) {
-    setError('')
-    try {
-      const rows = await api.logs({
-        limit: PAGE_SIZE,
-        offset: nextOffset,
-        user_id: userId.trim(),
-        model: model.trim(),
-        status,
-        channel_id: channelId.trim(),
-      })
-      setLogs(rows)
-      setOffset(nextOffset)
-    } catch (err: any) {
-      setError(err.message)
-    }
-  }
+  const [loading, setLoading] = useState(false)
 
   useEffect(() => {
-    load(0).catch(console.error)
-    // Initial page only; filters apply from the form.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    let cancelled = false
+    setLoading(true)
+    setError('')
+    const params = { ...filterParams(filters), limit: PAGE_SIZE, offset }
+    Promise.all([api.usage(filterParams(filters)), api.logs(params)])
+      .then(([u, l]) => {
+        if (cancelled) return
+        setUsage(u)
+        setLogs(l)
+      })
+      .catch((err: any) => {
+        if (!cancelled) setError(err.message || String(err))
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [filters, offset])
+
+  const tokenTotal = useMemo(() => {
+    if (!usage) return 0
+    return usage.totals.prompt_tokens + usage.totals.completion_tokens
+  }, [usage])
+
+  function applyPreset(days: number) {
+    const next = defaultFilters(days)
+    setDraft(next)
+    setFilters(next)
+    setOffset(0)
+  }
+
+  function applyDraft(e: FormEvent) {
+    e.preventDefault()
+    setFilters({ ...draft })
+    setOffset(0)
+  }
 
   return (
     <div>
       <h1>调用日志</h1>
-      {error && <div className="error">{error}</div>}
-      <form
-        className="filter-bar"
-        onSubmit={(e) => {
-          e.preventDefault()
-          load(0).catch(console.error)
-        }}
-      >
-        <input
-          placeholder="用户 ID"
-          value={userId}
-          onChange={(e) => setUserId(e.target.value)}
-        />
-        <input placeholder="模型" value={model} onChange={(e) => setModel(e.target.value)} />
-        <input
-          placeholder="渠道 ID"
-          value={channelId}
-          onChange={(e) => setChannelId(e.target.value)}
-        />
-        <select value={status} onChange={(e) => setStatus(e.target.value)}>
-          <option value="">全部状态</option>
-          <option value="success">success</option>
-          <option value="error">error</option>
-          <option value="billing_failed">billing_failed</option>
-        </select>
-        <button type="submit">筛选</button>
+      <form className="filter-bar" onSubmit={applyDraft}>
+        <div className="filter-presets">
+          <button
+            type="button"
+            className={filters.start === daysAgo(6) ? 'active' : ''}
+            onClick={() => applyPreset(6)}
+          >
+            近 7 天
+          </button>
+          <button
+            type="button"
+            className={filters.start === daysAgo(29) ? 'active' : ''}
+            onClick={() => applyPreset(29)}
+          >
+            近 30 天
+          </button>
+        </div>
+        <label>
+          起（UTC）
+          <input
+            type="date"
+            value={draft.start}
+            onChange={(e) => setDraft({ ...draft, start: e.target.value })}
+          />
+        </label>
+        <label>
+          止（UTC）
+          <input
+            type="date"
+            value={draft.end}
+            onChange={(e) => setDraft({ ...draft, end: e.target.value })}
+          />
+        </label>
+        <label>
+          模型
+          <input
+            value={draft.model}
+            onChange={(e) => setDraft({ ...draft, model: e.target.value })}
+            placeholder="可选"
+          />
+        </label>
+        <label>
+          令牌 ID
+          <input
+            value={draft.token_id}
+            onChange={(e) => setDraft({ ...draft, token_id: e.target.value })}
+            placeholder="可选"
+          />
+        </label>
+        <label>
+          用户 ID
+          <input
+            value={draft.user_id}
+            onChange={(e) => setDraft({ ...draft, user_id: e.target.value })}
+            placeholder="可选"
+          />
+        </label>
+        <label>
+          渠道 ID
+          <input
+            value={draft.channel_id}
+            onChange={(e) => setDraft({ ...draft, channel_id: e.target.value })}
+            placeholder="可选"
+          />
+        </label>
+        <label>
+          状态
+          <select value={draft.status} onChange={(e) => setDraft({ ...draft, status: e.target.value })}>
+            <option value="">全部</option>
+            <option value="success">成功</option>
+            <option value="error">错误</option>
+            <option value="billing_failed">计费失败</option>
+          </select>
+        </label>
+        <button type="submit">查询</button>
       </form>
+
+      {error && <div className="error">{error}</div>}
+      {loading && !usage ? <p className="muted">加载中...</p> : null}
+
+      {usage && (
+        <>
+          <div className="grid">
+            <div className="stat">
+              <div className="label">请求次数</div>
+              <div className="value">{fmtNum(usage.totals.requests)}</div>
+            </div>
+            <div className="stat">
+              <div className="label">Token 总数</div>
+              <div className="value">{fmtNum(tokenTotal)}</div>
+              {usage.totals.reasoning_tokens > 0 ? (
+                <div className="hint">含推理 {fmtNum(usage.totals.reasoning_tokens)}</div>
+              ) : null}
+            </div>
+            <div className="stat">
+              <div className="label">消耗额度</div>
+              <div className="value">{fmtNum(usage.totals.quota)}</div>
+            </div>
+          </div>
+
+          <div className="chart-grid">
+            <BarChart
+              title="请求次数（按日）"
+              values={usage.series.map((s) => s.requests)}
+              labels={usage.series.map((s) => s.day)}
+            />
+            <StackedTokenChart series={usage.series} />
+            <BarChart
+              title="消耗额度（按日）"
+              values={usage.series.map((s) => s.quota)}
+              labels={usage.series.map((s) => s.day)}
+              color="#0d9488"
+            />
+            <ModelBars rows={usage.by_model} />
+          </div>
+        </>
+      )}
+
+      <h2>逐笔记录</h2>
+      <p className="hint">
+        逐笔记录保留最近 {usage?.retention_days ?? '—'} 天，更早的只在上方图表中。时间均为 UTC。
+      </p>
       <table>
         <thead>
           <tr>
@@ -82,36 +240,44 @@ export function LogsPage() {
           </tr>
         </thead>
         <tbody>
-          {logs.map((l) => (
-            <tr key={l.id}>
-              <td>{l.created_at}</td>
-              <td>{l.user_id}</td>
-              <td>{l.channel_id ?? '-'}</td>
-              <td>{l.model}</td>
-              <td>{l.prompt_tokens}</td>
-              <td>
-                {l.cache_read_tokens} / {l.cache_write_tokens}
-              </td>
-              <td>
-                {l.completion_tokens}
-                {l.reasoning_tokens > 0 ? `（${l.reasoning_tokens}）` : ''}
-              </td>
-              <td className="mono">{l.usage_adapter || '-'}</td>
-              <td>{l.quota}</td>
-              <td>{l.duration_ms}ms</td>
-              <td className={`status-${l.status}`} title={l.error ?? l.raw_usage ?? ''}>
-                {l.status === 'billing_failed' ? '计费失败' : l.status}
+          {logs.length === 0 ? (
+            <tr>
+              <td colSpan={11} className="muted">
+                所选范围内没有逐笔记录
               </td>
             </tr>
-          ))}
+          ) : (
+            logs.map((l) => (
+              <tr key={l.id}>
+                <td>{l.created_at}</td>
+                <td>{l.user_id}</td>
+                <td>{l.channel_id ?? '-'}</td>
+                <td>{l.model}</td>
+                <td>{l.prompt_tokens}</td>
+                <td>
+                  {l.cache_read_tokens} / {l.cache_write_tokens}
+                </td>
+                <td>
+                  {l.completion_tokens}
+                  {l.reasoning_tokens > 0 ? `（${l.reasoning_tokens}）` : ''}
+                </td>
+                <td className="mono">{l.usage_adapter || '-'}</td>
+                <td>{l.quota}</td>
+                <td>{l.duration_ms}ms</td>
+                <td className={`status-${l.status}`} title={l.error ?? l.raw_usage ?? ''}>
+                  {statusLabel(l.status)}
+                </td>
+              </tr>
+            ))
+          )}
         </tbody>
       </table>
       <div className="pager">
-        <button type="button" disabled={offset === 0} onClick={() => load(Math.max(0, offset - PAGE_SIZE))}>
+        <button type="button" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>
           上一页
         </button>
         <span>第 {offset / PAGE_SIZE + 1} 页</span>
-        <button type="button" disabled={logs.length < PAGE_SIZE} onClick={() => load(offset + PAGE_SIZE)}>
+        <button type="button" disabled={logs.length < PAGE_SIZE} onClick={() => setOffset(offset + PAGE_SIZE)}>
           下一页
         </button>
       </div>

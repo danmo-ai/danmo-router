@@ -25,6 +25,8 @@ pub struct Config {
     /// Sustained legacy-key lookups per second on this process.
     pub relay_legacy_qps: u32,
     pub session_ttl_hours: i64,
+    /// Days to keep raw `logs` rows before rolling them into `log_daily`. `0` disables archiving.
+    pub log_retention_days: i64,
     pub cors_origins: Vec<String>,
     pub health: HealthConfig,
     /// When set, `connect` fills an empty database with sample channels, users, and logs.
@@ -141,6 +143,10 @@ impl Config {
                 .unwrap_or_else(|_| "168".into())
                 .parse()
                 .context("invalid SESSION_TTL_HOURS")?,
+            log_retention_days: env::var("LOG_RETENTION_DAYS")
+                .unwrap_or_else(|_| "30".into())
+                .parse()
+                .context("invalid LOG_RETENTION_DAYS")?,
             cors_origins,
             health: HealthConfig::from_env()?,
             seed_demo: env_flag("SEED_DEMO"),

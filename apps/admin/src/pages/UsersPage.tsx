@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
+import { Modal, roleLabel, statusLabel } from '../shared'
 
 type Draft = {
   quota: number
@@ -25,6 +26,7 @@ export function UsersPage() {
   })
   const [openId, setOpenId] = useState<number | null>(null)
   const [tokens, setTokens] = useState<any[]>([])
+  const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
 
   async function refresh() {
@@ -39,50 +41,20 @@ export function UsersPage() {
     setOpenId(userId)
   }
 
+  function closeCreate() {
+    setCreating(false)
+    setError('')
+  }
+
   return (
     <div>
-      <h1>用户</h1>
-      {error && <div className="error">{error}</div>}
-      <form
-        className="card form-grid"
-        onSubmit={async (e) => {
-          e.preventDefault()
-          setError('')
-          try {
-            await api.createUser(form)
-            setForm({ ...form, username: '', password: '' })
-            await refresh()
-          } catch (err: any) {
-            setError(err.message)
-          }
-        }}
-      >
-        <input
-          placeholder="用户名"
-          value={form.username}
-          onChange={(e) => setForm({ ...form, username: e.target.value })}
-          required
-        />
-        <input
-          placeholder="密码"
-          type="password"
-          value={form.password}
-          onChange={(e) => setForm({ ...form, password: e.target.value })}
-          required
-        />
-        <input
-          type="number"
-          placeholder="额度"
-          value={form.quota}
-          onChange={(e) => setForm({ ...form, quota: Number(e.target.value) })}
-        />
-        <input
-          placeholder="分组"
-          value={form.group_name}
-          onChange={(e) => setForm({ ...form, group_name: e.target.value })}
-        />
-        <button type="submit">创建用户</button>
-      </form>
+      <div className="page-header">
+        <h1>用户</h1>
+        <button type="button" onClick={() => setCreating(true)}>
+          新增用户
+        </button>
+      </div>
+      {error && !creating && <div className="error">{error}</div>}
       <table>
         <thead>
           <tr>
@@ -107,11 +79,11 @@ export function UsersPage() {
                     value={draft.role}
                     onChange={(e) => setDraft({ ...draft, role: e.target.value })}
                   >
-                    <option value="user">user</option>
-                    <option value="admin">admin</option>
+                    <option value="user">用户</option>
+                    <option value="admin">管理员</option>
                   </select>
                 ) : (
-                  u.role
+                  roleLabel(u.role)
                 )}
               </td>
               <td>
@@ -142,11 +114,11 @@ export function UsersPage() {
                     value={draft.status}
                     onChange={(e) => setDraft({ ...draft, status: e.target.value })}
                   >
-                    <option value="active">active</option>
-                    <option value="disabled">disabled</option>
+                    <option value="active">启用</option>
+                    <option value="disabled">禁用</option>
                   </select>
                 ) : (
-                  u.status
+                  statusLabel(u.status)
                 )}
               </td>
               <td className="actions">
@@ -231,6 +203,65 @@ export function UsersPage() {
           ))}
         </tbody>
       </table>
+      {creating && (
+        <Modal title="新增用户" onClose={closeCreate}>
+          {error && <div className="error">{error}</div>}
+          <form
+            className="form-stack"
+            onSubmit={async (e) => {
+              e.preventDefault()
+              setError('')
+              try {
+                await api.createUser(form)
+                setForm({ ...form, username: '', password: '' })
+                closeCreate()
+                await refresh()
+              } catch (err: any) {
+                setError(err.message)
+              }
+            }}
+          >
+            <label>
+              用户名
+              <input
+                value={form.username}
+                onChange={(e) => setForm({ ...form, username: e.target.value })}
+                required
+              />
+            </label>
+            <label>
+              密码
+              <input
+                type="password"
+                value={form.password}
+                onChange={(e) => setForm({ ...form, password: e.target.value })}
+                required
+              />
+            </label>
+            <label>
+              额度
+              <input
+                type="number"
+                value={form.quota}
+                onChange={(e) => setForm({ ...form, quota: Number(e.target.value) })}
+              />
+            </label>
+            <label>
+              分组
+              <input
+                value={form.group_name}
+                onChange={(e) => setForm({ ...form, group_name: e.target.value })}
+              />
+            </label>
+            <div className="form-actions">
+              <button type="submit">保存</button>
+              <button type="button" className="ghost" onClick={closeCreate}>
+                取消
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
       {openId !== null && (
         <div className="card sub">
           <h2>用户 {openId} 的令牌</h2>
@@ -250,7 +281,7 @@ export function UsersPage() {
                 <tr key={t.id}>
                   <td>{t.name}</td>
                   <td className="mono">{t.key_prefix}...</td>
-                  <td>{t.status}</td>
+                  <td>{statusLabel(t.status)}</td>
                   <td>{t.unlimited_quota ? '无限' : t.remain_quota}</td>
                   <td>{t.models || '全部'}</td>
                   <td className="actions">
