@@ -1,48 +1,73 @@
 import { useEffect, useState } from 'react'
-import { createPortal } from 'react-dom'
-import type { ReactNode } from 'react'
+import type { FormEvent, ReactNode } from 'react'
+import {
+  Cable,
+  KeyRound,
+  LayoutDashboard,
+  ScrollText,
+  Tags,
+  Users,
+} from 'lucide-react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import type { FormEvent } from 'react'
 import { api } from './api'
 import type { Dialect, Meta } from './api'
 import { ComplianceAuthNotice, ComplianceFooterLink } from './compliance'
+import { ErrorAlert } from '@/components/error-alert'
+import { Field } from '@/components/field'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { cn } from 'cn'
+
+const NAV = [
+  { to: '/', label: '概览', icon: LayoutDashboard, end: true },
+  { to: '/channels', label: '渠道', icon: Cable, end: false },
+  { to: '/users', label: '用户', icon: Users, end: false },
+  { to: '/prices', label: '价格', icon: Tags, end: false },
+  { to: '/redemptions', label: '兑换码', icon: KeyRound, end: false },
+  { to: '/logs', label: '日志', icon: ScrollText, end: false },
+]
 
 export function Modal({
   title,
   onClose,
   children,
+  className,
 }: {
   title: string
   onClose: () => void
   children: ReactNode
+  className?: string
 }) {
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
-  return createPortal(
-    <div className="modal-backdrop" onClick={onClose} role="presentation">
-      <div
-        className="modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="modal-header">
-          <h2>{title}</h2>
-          <button type="button" className="icon-close" onClick={onClose} aria-label="取消">
-            ×
-          </button>
-        </div>
-        <div className="modal-body">{children}</div>
-      </div>
-    </div>,
-    document.body,
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className={cn('sm:max-w-lg', className)}>
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+        </DialogHeader>
+        {children}
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -73,24 +98,33 @@ export function LoginPage({ onLogin }: { onLogin: (u: any) => void }) {
   }
 
   return (
-    <div className="auth-page">
-      <form className="card" onSubmit={submit}>
-        <h1>管理后台</h1>
-        <p className="muted">danmo-router Admin Portal</p>
-        {error && <div className="error">{error}</div>}
-        <label>
-          用户名
-          <input value={username} onChange={(e) => setUsername(e.target.value)} />
-        </label>
-        <label>
-          密码
-          <input
+    <div className="grid min-h-svh place-items-center bg-muted/40 p-6">
+      <form
+        className="grid w-full max-w-sm gap-4 rounded-xl border bg-card p-6 shadow-sm"
+        onSubmit={submit}
+      >
+        <div className="flex items-center gap-3">
+          <div className="grid size-9 place-items-center rounded-lg bg-primary text-sm font-semibold text-primary-foreground">
+            D
+          </div>
+          <div>
+            <h1 className="text-lg font-semibold tracking-tight">管理后台</h1>
+            <p className="text-xs text-muted-foreground">danmo-router Admin Portal</p>
+          </div>
+        </div>
+        {error ? <ErrorAlert>{error}</ErrorAlert> : null}
+        <Field label="用户名">
+          <Input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" />
+        </Field>
+        <Field label="密码">
+          <Input
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
           />
-        </label>
-        <button type="submit">登录</button>
+        </Field>
+        <Button type="submit">登录</Button>
         <ComplianceAuthNotice />
       </form>
     </div>
@@ -107,28 +141,62 @@ export function Layout({
   children: ReactNode
 }) {
   return (
-    <div className="layout">
-      <aside>
-        <div className="brand">Danmo Admin</div>
-        <nav>
-          <NavLink to="/">概览</NavLink>
-          <NavLink to="/channels">渠道</NavLink>
-          <NavLink to="/users">用户</NavLink>
-          <NavLink to="/prices">价格</NavLink>
-          <NavLink to="/redemptions">兑换码</NavLink>
-          <NavLink to="/logs">日志</NavLink>
-        </nav>
-        <div className="aside-bottom">
-          <ComplianceFooterLink />
-          <div className="aside-footer">
-            <div>{user.username}</div>
-            <button className="linkish" onClick={onLogout}>
-              退出
-            </button>
+    <div className="flex min-h-svh flex-col md:flex-row">
+      <aside className="flex shrink-0 flex-col border-b bg-sidebar md:sticky md:top-0 md:h-svh md:w-60 md:border-r md:border-b-0">
+        <div className="flex items-center gap-2 px-4 py-4">
+          <div className="grid size-7 place-items-center rounded-md bg-primary text-xs font-semibold text-primary-foreground">
+            D
           </div>
+          <div className="text-sm font-semibold tracking-tight">Danmo Admin</div>
+        </div>
+        <nav className="flex gap-1 overflow-x-auto px-2 pb-2 md:flex-1 md:flex-col md:overflow-visible md:px-2">
+          {NAV.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.end}
+              className={({ isActive }) =>
+                cn(
+                  'flex items-center gap-2 rounded-md px-2.5 py-2 text-sm text-muted-foreground whitespace-nowrap hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+                  isActive && 'bg-sidebar-accent font-medium text-sidebar-accent-foreground',
+                )
+              }
+            >
+              <item.icon className="size-4" />
+              {item.label}
+            </NavLink>
+          ))}
+        </nav>
+        <div className="hidden border-t p-2 md:block">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" className="w-full justify-start gap-2 px-2">
+                <span className="grid size-7 place-items-center rounded-full bg-muted text-xs font-medium">
+                  {String(user.username ?? '?').slice(0, 1).toUpperCase()}
+                </span>
+                <span className="truncate">{user.username}</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-52">
+              <DropdownMenuLabel>{user.username}</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <div className="px-2 py-1.5">
+                <ComplianceFooterLink />
+              </div>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={onLogout}>退出</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </aside>
-      <main>{children}</main>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex items-center justify-end border-b px-4 py-2 md:hidden">
+          <Button variant="ghost" size="sm" onClick={onLogout}>
+            退出 {user.username}
+          </Button>
+        </div>
+        <main className="mx-auto w-full max-w-7xl flex-1 p-4 md:p-6">{children}</main>
+      </div>
     </div>
   )
 }
@@ -158,13 +226,18 @@ export function DialectSelect({
   onChange: (v: string) => void
 }) {
   return (
-    <select value={value} onChange={(e) => onChange(e.target.value)}>
-      {dialectsOf(meta, protocol).map((d) => (
-        <option key={d.name} value={d.name} title={d.label}>
-          {d.name}
-        </option>
-      ))}
-    </select>
+    <Select value={value} onValueChange={onChange}>
+      <SelectTrigger className="w-full">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {dialectsOf(meta, protocol).map((d) => (
+          <SelectItem key={d.name} value={d.name} title={d.label}>
+            {d.name}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   )
 }
 

@@ -5,6 +5,30 @@ import { api } from '../api'
 import { CHANNEL_PRESETS, MODE_LABELS, PROTOCOL_LABELS, dialectForModel } from '../presets'
 import type { DialectRule } from '../presets'
 import { DialectSelect, dialectsOf, useMeta } from '../shared'
+import { ErrorAlert } from '@/components/error-alert'
+import { Field } from '@/components/field'
+import { PageHeader } from '@/components/page-header'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 
 type ModelRow = { model: string; upstream_model: string; upstream_dialect: string }
 
@@ -46,6 +70,7 @@ export function ChannelFormPage() {
   const [rows, setRows] = useState<ModelRow[]>([])
   const [rules, setRules] = useState<DialectRule[]>([])
   const [newModels, setNewModels] = useState(editing === null ? 'gpt-4o-mini' : '')
+  const [preset, setPreset] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(editing !== null)
 
@@ -144,224 +169,286 @@ export function ChannelFormPage() {
   const groups = [...new Set(CHANNEL_PRESETS.map((p) => p.group))]
   const canConvert = form.upstream_protocol !== 'embeddings'
 
-  if (loading) return <p className="muted">加载中...</p>
+  if (loading) return <p className="text-sm text-muted-foreground">加载中...</p>
 
   return (
-    <div className="form-page">
-      <div className="page-header">
-        <div>
-          <Link className="back-link" to="/channels">
+    <div>
+      <PageHeader
+        eyebrow={
+          <Link className="text-xs text-muted-foreground hover:text-foreground" to="/channels">
             ← 返回渠道列表
           </Link>
-          <h1>{editing !== null ? '编辑渠道' : '新增渠道'}</h1>
-        </div>
-      </div>
-      {error && <div className="error">{error}</div>}
-      <form className="card form-stack" onSubmit={submit}>
-        {editing === null && (
-          <label>
-            预设（只填充表单）
-            <select value="" onChange={(e) => applyPreset(e.target.value)}>
-              <option value="" disabled>
-                选择原厂或三方渠道…
-              </option>
-              {groups.map((g) => (
-                <optgroup key={g} label={g}>
-                  {CHANNEL_PRESETS.filter((p) => p.group === g).map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.label}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
-          </label>
-        )}
-        <div className="form-cols-2">
-          <label>
-            名称
-            <input
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-              required
-            />
-          </label>
-          <label>
-            Base URL
-            <input
-              value={form.base_url}
-              onChange={(e) => setForm({ ...form, base_url: e.target.value })}
-              required
-            />
-          </label>
-        </div>
-        <label>
-          上游 API Key{editing !== null ? '（留空不改）' : ''}
-          <input
-            value={form.key}
-            onChange={(e) => setForm({ ...form, key: e.target.value })}
-            required={editing === null}
-          />
-        </label>
-        <div className="form-cols-3">
-          <label>
-            上游协议
-            <select value={form.upstream_protocol} onChange={(e) => setProtocol(e.target.value)}>
-              {(meta?.protocols ?? Object.keys(PROTOCOL_LABELS)).map((p) => (
-                <option key={p} value={p}>
-                  {PROTOCOL_LABELS[p] ?? p}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            转发模式
-            <select
-              value={form.relay_mode}
-              onChange={(e) => setForm({ ...form, relay_mode: e.target.value })}
-            >
-              {(meta?.relay_modes ?? ['passthrough', 'convert'])
-                .filter((m) => canConvert || m === 'passthrough')
-                .map((m) => (
-                  <option key={m} value={m}>
-                    {MODE_LABELS[m] ?? m}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <label>
-            鉴权方式
-            <select
-              value={form.auth_style}
-              onChange={(e) => setForm({ ...form, auth_style: e.target.value })}
-            >
-              {(meta?.auth_styles ?? ['bearer', 'x_api_key', 'x_goog_api_key']).map((a) => (
-                <option key={a} value={a}>
-                  {a}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-        <div className="form-cols-3">
-          <label>
-            新模型默认方言
-            <DialectSelect
-              meta={meta}
-              protocol={form.upstream_protocol}
-              value={form.default_dialect}
-              onChange={(v) => setForm({ ...form, default_dialect: v })}
-            />
-          </label>
-          <label>
-            原厂标识（vendor，聚合渠道留空）
-            <input
-              value={form.vendor}
-              onChange={(e) => setForm({ ...form, vendor: e.target.value })}
-            />
-          </label>
-          <label>
-            分组
-            <input
-              value={form.group_name}
-              onChange={(e) => setForm({ ...form, group_name: e.target.value })}
-            />
-          </label>
-        </div>
-        <div className="form-cols-2">
-          <label>
-            优先级
-            <input
-              type="number"
-              value={form.priority}
-              onChange={(e) => setForm({ ...form, priority: Number(e.target.value) })}
-            />
-          </label>
-          <label>
-            权重
-            <input
-              type="number"
-              value={form.weight}
-              onChange={(e) => setForm({ ...form, weight: Number(e.target.value) })}
-            />
-          </label>
-        </div>
-        <label className="checkbox">
-          <input
-            type="checkbox"
-            checked={form.inject_stream_usage}
-            onChange={(e) => setForm({ ...form, inject_stream_usage: e.target.checked })}
-          />
-          流式请求补 include_usage（计费需要）
-        </label>
-        <div>
-          <table className="rows">
-            <thead>
-              <tr>
-                <th>模型名（客户端）</th>
-                <th>上游模型名（空 = 同名）</th>
-                <th>上游方言</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r, i) => (
-                <tr key={r.model}>
-                  <td>{r.model}</td>
-                  <td>
-                    <input
-                      value={r.upstream_model}
-                      placeholder={r.model}
-                      onChange={(e) =>
-                        setRows(rows.map((x, j) => (j === i ? { ...x, upstream_model: e.target.value } : x)))
-                      }
-                    />
-                  </td>
-                  <td>
-                    <DialectSelect
-                      meta={meta}
-                      protocol={form.upstream_protocol}
-                      value={r.upstream_dialect}
-                      onChange={(v) =>
-                        setRows(rows.map((x, j) => (j === i ? { ...x, upstream_dialect: v } : x)))
-                      }
-                    />
-                  </td>
-                  <td>
-                    <button type="button" className="danger" onClick={() => setRows(rows.filter((_, j) => j !== i))}>
-                      移除
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div className="row-add">
-            <input
-              placeholder="添加模型，逗号分隔（按默认方言和预设前缀规则填方言）"
-              value={newModels}
-              onChange={(e) => setNewModels(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault()
-                  addModels()
+        }
+        title={editing !== null ? '编辑渠道' : '新增渠道'}
+      />
+      {error ? <div className="mb-4"><ErrorAlert>{error}</ErrorAlert></div> : null}
+      <form className="grid max-w-4xl gap-4" onSubmit={submit}>
+        {editing === null ? (
+          <Card className="shadow-none">
+            <CardHeader>
+              <CardTitle>预设</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <Field label="只填充表单，不会立刻保存">
+                <Select
+                  value={preset || undefined}
+                  onValueChange={(id) => {
+                    setPreset(id)
+                    applyPreset(id)
+                  }}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="选择原厂或三方渠道…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {groups.map((g) => (
+                      <SelectGroup key={g}>
+                        <SelectLabel>{g}</SelectLabel>
+                        {CHANNEL_PRESETS.filter((p) => p.group === g).map((p) => (
+                          <SelectItem key={p.id} value={p.id}>
+                            {p.label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+            </CardContent>
+          </Card>
+        ) : null}
+
+        <Card className="shadow-none">
+          <CardHeader>
+            <CardTitle>基础信息</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4 sm:grid-cols-2">
+            <Field label="名称">
+              <Input
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                required
+              />
+            </Field>
+            <Field label="分组">
+              <Input
+                value={form.group_name}
+                onChange={(e) => setForm({ ...form, group_name: e.target.value })}
+              />
+            </Field>
+            <Field label="优先级">
+              <Input
+                type="number"
+                value={form.priority}
+                onChange={(e) => setForm({ ...form, priority: Number(e.target.value) })}
+              />
+            </Field>
+            <Field label="权重" hint="同一优先级内按比例分配流量">
+              <Input
+                type="number"
+                value={form.weight}
+                onChange={(e) => setForm({ ...form, weight: Number(e.target.value) })}
+              />
+            </Field>
+          </CardContent>
+        </Card>
+
+        <Card className="shadow-none">
+          <CardHeader>
+            <CardTitle>上游</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4">
+            <Field label="Base URL">
+              <Input
+                value={form.base_url}
+                onChange={(e) => setForm({ ...form, base_url: e.target.value })}
+                required
+              />
+            </Field>
+            <Field label={editing !== null ? '上游 API Key（留空不改）' : '上游 API Key'}>
+              <Input
+                value={form.key}
+                onChange={(e) => setForm({ ...form, key: e.target.value })}
+                required={editing === null}
+              />
+            </Field>
+            <div className="grid gap-4 sm:grid-cols-3">
+              <Field label="上游协议">
+                <Select value={form.upstream_protocol} onValueChange={setProtocol}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(meta?.protocols ?? Object.keys(PROTOCOL_LABELS)).map((p) => (
+                      <SelectItem key={p} value={p}>
+                        {PROTOCOL_LABELS[p] ?? p}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field label="转发模式">
+                <Select
+                  value={form.relay_mode}
+                  onValueChange={(relay_mode) => setForm({ ...form, relay_mode })}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(meta?.relay_modes ?? ['passthrough', 'convert'])
+                      .filter((m) => canConvert || m === 'passthrough')
+                      .map((m) => (
+                        <SelectItem key={m} value={m}>
+                          {MODE_LABELS[m] ?? m}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field label="鉴权方式">
+                <Select
+                  value={form.auth_style}
+                  onValueChange={(auth_style) => setForm({ ...form, auth_style })}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(meta?.auth_styles ?? ['bearer', 'x_api_key', 'x_goog_api_key']).map((a) => (
+                      <SelectItem key={a} value={a}>
+                        {a}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="shadow-none">
+          <CardHeader>
+            <CardTitle>模型映射</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-3">
+            <div className="overflow-hidden rounded-lg border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>模型名（客户端）</TableHead>
+                    <TableHead>上游模型名（空 = 同名）</TableHead>
+                    <TableHead>上游方言</TableHead>
+                    <TableHead />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {rows.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={4} className="text-muted-foreground">
+                        还没有模型
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    rows.map((r, i) => (
+                      <TableRow key={r.model}>
+                        <TableCell className="font-mono text-xs">{r.model}</TableCell>
+                        <TableCell>
+                          <Input
+                            value={r.upstream_model}
+                            placeholder={r.model}
+                            onChange={(e) =>
+                              setRows(rows.map((x, j) => (j === i ? { ...x, upstream_model: e.target.value } : x)))
+                            }
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <DialectSelect
+                            meta={meta}
+                            protocol={form.upstream_protocol}
+                            value={r.upstream_dialect}
+                            onChange={(v) =>
+                              setRows(rows.map((x, j) => (j === i ? { ...x, upstream_dialect: v } : x)))
+                            }
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="text-destructive"
+                            onClick={() => setRows(rows.filter((_, j) => j !== i))}
+                          >
+                            移除
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+            <div className="flex gap-2">
+              <Input
+                placeholder="添加模型，逗号分隔（按默认方言和预设前缀规则填方言）"
+                value={newModels}
+                onChange={(e) => setNewModels(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    addModels()
+                  }
+                }}
+              />
+              <Button type="button" variant="secondary" onClick={addModels}>
+                添加
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="shadow-none">
+          <CardHeader>
+            <CardTitle>高级</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="新模型默认方言">
+                <DialectSelect
+                  meta={meta}
+                  protocol={form.upstream_protocol}
+                  value={form.default_dialect}
+                  onChange={(v) => setForm({ ...form, default_dialect: v })}
+                />
+              </Field>
+              <Field label="原厂标识（vendor，聚合渠道留空）">
+                <Input
+                  value={form.vendor}
+                  onChange={(e) => setForm({ ...form, vendor: e.target.value })}
+                />
+              </Field>
+            </div>
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox
+                checked={form.inject_stream_usage}
+                onCheckedChange={(checked) =>
+                  setForm({ ...form, inject_stream_usage: checked === true })
                 }
-              }}
-            />
-            <button type="button" onClick={addModels}>
-              添加
-            </button>
-          </div>
-        </div>
-        <p className="hint">
-          方言是上游对该模型实际遵循的厂商规范。客户端协议与该模型的原厂方言都和这一行一致时原样透传，否则经中间表示转换；opaque（聚合渠道）只透传同协议请求。
-          转发模式只决定能否服务其他协议。权重在同一优先级内按比例分配流量。
-        </p>
-        <div className="form-actions">
-          <button type="submit">保存</button>
-          <Link className="button ghost" to="/channels">
-            取消
-          </Link>
+              />
+              流式请求补 include_usage（计费需要）
+            </label>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              方言是上游对该模型实际遵循的厂商规范。客户端协议与该模型的原厂方言都和这一行一致时原样透传，否则经中间表示转换；opaque（聚合渠道）只透传同协议请求。转发模式只决定能否服务其他协议。
+            </p>
+          </CardContent>
+        </Card>
+
+        <div className="flex gap-2">
+          <Button type="submit">保存</Button>
+          <Button variant="outline" asChild>
+            <Link to="/channels">取消</Link>
+          </Button>
         </div>
       </form>
     </div>

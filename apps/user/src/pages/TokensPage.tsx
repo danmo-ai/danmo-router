@@ -1,6 +1,25 @@
 import { useEffect, useState } from 'react'
+import { toast } from 'sonner'
 import { api } from '../api'
-import { Modal, statusLabel } from '../shared'
+import { Modal } from '../shared'
+import { useConfirm } from '@/components/confirm-dialog'
+import { CopyButton } from '@/components/copy-button'
+import { DataTable, EmptyRow, SkeletonRows } from '@/components/data-table'
+import { ErrorAlert } from '@/components/error-alert'
+import { Field } from '@/components/field'
+import { PageHeader } from '@/components/page-header'
+import { RowActions } from '@/components/row-actions'
+import { StatusBadge } from '@/components/status-badge'
+import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Input } from '@/components/ui/input'
+import {
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 
 const EMPTY = {
   name: 'default',
@@ -13,17 +32,21 @@ const EMPTY = {
 
 export function TokensPage() {
   const [tokens, setTokens] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
   const [form, setForm] = useState({ ...EMPTY })
   const [editing, setEditing] = useState<number | null>(null)
   const [open, setOpen] = useState(false)
   const [createdKey, setCreatedKey] = useState('')
   const [error, setError] = useState('')
+  const { ask, dialog } = useConfirm()
 
   async function refresh() {
     setTokens(await api.tokens())
   }
   useEffect(() => {
-    refresh().catch(console.error)
+    refresh()
+      .catch(console.error)
+      .finally(() => setLoading(false))
   }, [])
 
   function payload() {
@@ -46,100 +69,129 @@ export function TokensPage() {
 
   return (
     <div>
-      <div className="page-header">
-        <h1>API 令牌</h1>
-        <button
-          type="button"
-          onClick={() => {
-            setEditing(null)
-            setForm({ ...EMPTY })
-            setError('')
-            setOpen(true)
-          }}
-        >
-          新增令牌
-        </button>
-      </div>
-      {createdKey && (
-        <div className="card success">
-          新令牌（仅显示一次）：<code>{createdKey}</code>
-        </div>
-      )}
-      <table>
-        <thead>
-          <tr>
-            <th>名称</th>
-            <th>前缀</th>
-            <th>状态</th>
-            <th>额度</th>
-            <th>模型</th>
-            <th>分组</th>
-            <th>过期</th>
-            <th>操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          {tokens.map((t) => (
-            <tr key={t.id}>
-              <td>{t.name}</td>
-              <td>{t.key_prefix}...</td>
-              <td>{statusLabel(t.status)}</td>
-              <td>{t.unlimited_quota ? '无限' : t.remain_quota}</td>
-              <td>{t.models || '全部'}</td>
-              <td>{t.group_name || '账户'}</td>
-              <td>{t.expired_at || '-'}</td>
-              <td className="actions">
-                <button
-                  onClick={() => {
-                    setEditing(t.id)
-                    setCreatedKey('')
-                    setError('')
-                    setForm({
-                      name: t.name,
-                      unlimited_quota: Boolean(t.unlimited_quota),
-                      remain_quota: t.unlimited_quota ? 0 : t.remain_quota,
-                      expired_at: toLocalInput(t.expired_at),
-                      models: t.models || '',
-                      group_name: t.group_name || '',
-                    })
-                    setOpen(true)
-                  }}
-                >
-                  编辑
-                </button>
-                <button
-                  onClick={async () => {
-                    await api.setTokenStatus(t.id, t.status === 'active' ? 'disabled' : 'active')
-                    await refresh()
-                  }}
-                >
-                  {t.status === 'active' ? '禁用' : '启用'}
-                </button>
-                <button
-                  className="danger"
-                  onClick={async () => {
-                    await api.deleteToken(t.id)
-                    await refresh()
-                  }}
-                >
-                  删除
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {open && (
+      <PageHeader
+        title="API 令牌"
+        description="完整密钥只在创建时显示一次。"
+        actions={
+          <Button
+            type="button"
+            onClick={() => {
+              setEditing(null)
+              setForm({ ...EMPTY })
+              setError('')
+              setOpen(true)
+            }}
+          >
+            新增令牌
+          </Button>
+        }
+      />
+      <DataTable>
+        <table className="w-full caption-bottom text-sm">
+          <TableHeader>
+            <TableRow>
+              <TableHead>名称</TableHead>
+              <TableHead>前缀</TableHead>
+              <TableHead>状态</TableHead>
+              <TableHead>额度</TableHead>
+              <TableHead>模型</TableHead>
+              <TableHead>分组</TableHead>
+              <TableHead>过期</TableHead>
+              <TableHead className="text-right">操作</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {loading ? (
+              <SkeletonRows cols={8} />
+            ) : tokens.length === 0 ? (
+              <EmptyRow colSpan={8}>还没有令牌</EmptyRow>
+            ) : (
+              tokens.map((t) => (
+                <TableRow key={t.id}>
+                  <TableCell className="font-medium">{t.name}</TableCell>
+                  <TableCell className="font-mono text-xs">{t.key_prefix}...</TableCell>
+                  <TableCell>
+                    <StatusBadge status={t.status} />
+                  </TableCell>
+                  <TableCell>{t.unlimited_quota ? '无限' : t.remain_quota}</TableCell>
+                  <TableCell className="max-w-48 whitespace-normal">{t.models || '全部'}</TableCell>
+                  <TableCell>{t.group_name || '账户'}</TableCell>
+                  <TableCell className="font-mono text-xs">{t.expired_at || '-'}</TableCell>
+                  <TableCell>
+                    <RowActions
+                      primary={
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setEditing(t.id)
+                            setError('')
+                            setForm({
+                              name: t.name,
+                              unlimited_quota: Boolean(t.unlimited_quota),
+                              remain_quota: t.unlimited_quota ? 0 : t.remain_quota,
+                              expired_at: toLocalInput(t.expired_at),
+                              models: t.models || '',
+                              group_name: t.group_name || '',
+                            })
+                            setOpen(true)
+                          }}
+                        >
+                          编辑
+                        </Button>
+                      }
+                      menu={[
+                        {
+                          label: t.status === 'active' ? '禁用' : '启用',
+                          destructive: t.status === 'active',
+                          onSelect: () => {
+                            if (t.status === 'active') {
+                              ask({
+                                title: `禁用令牌 ${t.name}？`,
+                                description: '禁用后使用该令牌的请求会被拒绝。',
+                                confirmLabel: '禁用',
+                                destructive: true,
+                                run: () => setStatus(t, 'disabled'),
+                              })
+                            } else {
+                              void setStatus(t, 'active')
+                            }
+                          },
+                        },
+                        {
+                          label: '删除',
+                          destructive: true,
+                          onSelect: () =>
+                            ask({
+                              title: `删除令牌 ${t.name}？`,
+                              description: '删除后不可恢复，已发出的密钥立即失效。',
+                              confirmLabel: '删除',
+                              destructive: true,
+                              run: () => remove(t.id),
+                            }),
+                        },
+                      ]}
+                    />
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </table>
+      </DataTable>
+      {open ? (
         <Modal title={editing !== null ? '编辑令牌' : '新增令牌'} onClose={closeForm}>
-          {error && <div className="error">{error}</div>}
+          {error ? <ErrorAlert>{error}</ErrorAlert> : null}
           <form
-            className="form-stack"
+            className="grid gap-4"
             onSubmit={async (e) => {
               e.preventDefault()
               setError('')
               try {
                 if (editing !== null) {
                   await api.updateToken(editing, payload())
+                  toast.success('令牌已更新')
                 } else {
                   const created = await api.createToken(payload())
                   setCreatedKey(created.key)
@@ -151,64 +203,93 @@ export function TokensPage() {
               }
             }}
           >
-            <label>
-              令牌名称
-              <input
+            <Field label="令牌名称">
+              <Input
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
                 required
               />
-            </label>
-            <label className="checkbox">
-              <input
-                type="checkbox"
+            </Field>
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox
                 checked={form.unlimited_quota}
-                onChange={(e) => setForm({ ...form, unlimited_quota: e.target.checked })}
+                onCheckedChange={(checked) =>
+                  setForm({ ...form, unlimited_quota: checked === true })
+                }
               />
               无限额度（仍受账户额度限制）
             </label>
-            <label>
-              令牌额度
-              <input
+            <Field label="令牌额度">
+              <Input
                 type="number"
                 value={form.remain_quota}
                 disabled={form.unlimited_quota}
                 onChange={(e) => setForm({ ...form, remain_quota: Number(e.target.value) })}
               />
-            </label>
-            <label>
-              过期时间（可空）
-              <input
+            </Field>
+            <Field label="过期时间（可空）">
+              <Input
                 type="datetime-local"
                 value={form.expired_at}
                 onChange={(e) => setForm({ ...form, expired_at: e.target.value })}
               />
-            </label>
-            <label>
-              模型白名单（逗号分隔，空 = 全部）
-              <input
+            </Field>
+            <Field label="模型白名单（逗号分隔，空 = 全部）">
+              <Input
                 value={form.models}
                 onChange={(e) => setForm({ ...form, models: e.target.value })}
               />
-            </label>
-            <label>
-              分组覆盖（空 = 用账户分组）
-              <input
+            </Field>
+            <Field label="分组覆盖（空 = 用账户分组）">
+              <Input
                 value={form.group_name}
                 onChange={(e) => setForm({ ...form, group_name: e.target.value })}
               />
-            </label>
-            <div className="form-actions">
-              <button type="submit">保存</button>
-              <button type="button" className="ghost" onClick={closeForm}>
+            </Field>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={closeForm}>
                 取消
-              </button>
+              </Button>
+              <Button type="submit">保存</Button>
             </div>
           </form>
         </Modal>
-      )}
+      ) : null}
+      {createdKey ? (
+        <Modal title="新令牌" onClose={() => setCreatedKey('')}>
+          <p className="text-sm text-muted-foreground">密钥只显示这一次，请立刻复制保存。</p>
+          <code className="block rounded-lg border bg-muted/40 p-3 font-mono text-xs break-all">
+            {createdKey}
+          </code>
+          <div className="flex justify-end">
+            <CopyButton text={createdKey} label="复制密钥" />
+          </div>
+        </Modal>
+      ) : null}
+      {dialog}
     </div>
   )
+
+  async function setStatus(t: any, status: string) {
+    try {
+      await api.setTokenStatus(t.id, status)
+      await refresh()
+    } catch (err: any) {
+      toast.error(err.message)
+      throw err
+    }
+  }
+
+  async function remove(id: number) {
+    try {
+      await api.deleteToken(id)
+      toast.success('令牌已删除')
+      await refresh()
+    } catch (err: any) {
+      toast.error(err.message)
+      throw err
+    }
+  }
 }
 
 function toLocalInput(value: string | null): string {

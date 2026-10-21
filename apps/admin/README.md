@@ -14,6 +14,12 @@ npm run dev
 
 页面路由：`/` 概览，`/channels` 渠道，`/users` 用户（额度调整、重置密码、管理令牌），`/prices` 模型价格，`/redemptions` 兑换码批量生成，`/logs` 调用日志。
 
+界面使用 [Tailwind CSS](https://tailwindcss.com/) v4 和 [shadcn/ui](https://ui.shadcn.com/) 组件（`src/components/ui/`）。主题变量在 `src/index.css`。新增组件：
+
+```bash
+npx shadcn@latest add <component>
+```
+
 ```bash
 npm run lint
 npm run build

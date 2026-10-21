@@ -2,8 +2,31 @@ import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { api } from '../api'
 import type { UsageReport } from '../api'
-import { PAGE_SIZE, statusLabel } from '../shared'
+import { PAGE_SIZE } from '../shared'
 import { BarChart, ModelBars, StackedTokenChart, fmtNum } from './charts'
+import { DataTable, EmptyRow, Pager, SkeletonRows } from '@/components/data-table'
+import { ErrorAlert } from '@/components/error-alert'
+import { Field } from '@/components/field'
+import { PageHeader } from '@/components/page-header'
+import { StatCard } from '@/components/stat-card'
+import { StatusBadge } from '@/components/status-badge'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { cn } from 'cn'
 
 type LogFilters = {
   start: string
@@ -48,6 +71,8 @@ function filterParams(f: LogFilters) {
     channel_id: f.channel_id ? Number(f.channel_id) : undefined,
   }
 }
+
+const ANY = '__any__'
 
 export function LogsPage() {
   const [filters, setFilters] = useState<LogFilters>(() => defaultFilters(6))
@@ -100,108 +125,87 @@ export function LogsPage() {
 
   return (
     <div>
-      <h1>调用日志</h1>
-      <form className="filter-bar" onSubmit={applyDraft}>
-        <div className="filter-presets">
-          <button
-            type="button"
-            className={filters.start === daysAgo(6) ? 'active' : ''}
-            onClick={() => applyPreset(6)}
-          >
+      <PageHeader title="调用日志" description="按日汇总，以及保留期内的逐笔记录。时间均为 UTC。" />
+      <form className="mb-4 flex flex-wrap items-end gap-3 rounded-xl border bg-card p-3" onSubmit={applyDraft}>
+        <div className="inline-flex h-9 rounded-lg border bg-muted p-0.5">
+          <PresetButton active={filters.start === daysAgo(6)} onClick={() => applyPreset(6)}>
             近 7 天
-          </button>
-          <button
-            type="button"
-            className={filters.start === daysAgo(29) ? 'active' : ''}
-            onClick={() => applyPreset(29)}
-          >
+          </PresetButton>
+          <PresetButton active={filters.start === daysAgo(29)} onClick={() => applyPreset(29)}>
             近 30 天
-          </button>
+          </PresetButton>
         </div>
-        <label>
-          起（UTC）
-          <input
-            type="date"
-            value={draft.start}
-            onChange={(e) => setDraft({ ...draft, start: e.target.value })}
-          />
-        </label>
-        <label>
-          止（UTC）
-          <input
-            type="date"
-            value={draft.end}
-            onChange={(e) => setDraft({ ...draft, end: e.target.value })}
-          />
-        </label>
-        <label>
-          模型
-          <input
+        <Field label="起（UTC）" className="w-36">
+          <Input type="date" value={draft.start} onChange={(e) => setDraft({ ...draft, start: e.target.value })} />
+        </Field>
+        <Field label="止（UTC）" className="w-36">
+          <Input type="date" value={draft.end} onChange={(e) => setDraft({ ...draft, end: e.target.value })} />
+        </Field>
+        <Field label="模型" className="w-36">
+          <Input
             value={draft.model}
             onChange={(e) => setDraft({ ...draft, model: e.target.value })}
             placeholder="可选"
           />
-        </label>
-        <label>
-          令牌 ID
-          <input
+        </Field>
+        <Field label="令牌 ID" className="w-28">
+          <Input
             value={draft.token_id}
             onChange={(e) => setDraft({ ...draft, token_id: e.target.value })}
             placeholder="可选"
           />
-        </label>
-        <label>
-          用户 ID
-          <input
+        </Field>
+        <Field label="用户 ID" className="w-28">
+          <Input
             value={draft.user_id}
             onChange={(e) => setDraft({ ...draft, user_id: e.target.value })}
             placeholder="可选"
           />
-        </label>
-        <label>
-          渠道 ID
-          <input
+        </Field>
+        <Field label="渠道 ID" className="w-28">
+          <Input
             value={draft.channel_id}
             onChange={(e) => setDraft({ ...draft, channel_id: e.target.value })}
             placeholder="可选"
           />
-        </label>
-        <label>
-          状态
-          <select value={draft.status} onChange={(e) => setDraft({ ...draft, status: e.target.value })}>
-            <option value="">全部</option>
-            <option value="success">成功</option>
-            <option value="error">错误</option>
-            <option value="billing_failed">计费失败</option>
-          </select>
-        </label>
-        <button type="submit">查询</button>
+        </Field>
+        <Field label="状态" className="w-32">
+          <Select
+            value={draft.status || ANY}
+            onValueChange={(status) => setDraft({ ...draft, status: status === ANY ? '' : status })}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ANY}>全部</SelectItem>
+              <SelectItem value="success">成功</SelectItem>
+              <SelectItem value="error">错误</SelectItem>
+              <SelectItem value="billing_failed">计费失败</SelectItem>
+            </SelectContent>
+          </Select>
+        </Field>
+        <Button type="submit">查询</Button>
       </form>
 
-      {error && <div className="error">{error}</div>}
-      {loading && !usage ? <p className="muted">加载中...</p> : null}
+      {error ? <div className="mb-4"><ErrorAlert>{error}</ErrorAlert></div> : null}
 
-      {usage && (
+      {usage ? (
         <>
-          <div className="grid">
-            <div className="stat">
-              <div className="label">请求次数</div>
-              <div className="value">{fmtNum(usage.totals.requests)}</div>
-            </div>
-            <div className="stat">
-              <div className="label">Token 总数</div>
-              <div className="value">{fmtNum(tokenTotal)}</div>
-              {usage.totals.reasoning_tokens > 0 ? (
-                <div className="hint">含推理 {fmtNum(usage.totals.reasoning_tokens)}</div>
-              ) : null}
-            </div>
-            <div className="stat">
-              <div className="label">消耗额度</div>
-              <div className="value">{fmtNum(usage.totals.quota)}</div>
-            </div>
+          <div className="mb-4 grid gap-3 sm:grid-cols-3">
+            <StatCard label="请求次数" value={usage.totals.requests} />
+            <StatCard
+              label="Token 总数"
+              value={tokenTotal}
+              hint={
+                usage.totals.reasoning_tokens > 0
+                  ? `含推理 ${fmtNum(usage.totals.reasoning_tokens)}`
+                  : undefined
+              }
+            />
+            <StatCard label="消耗额度" value={usage.totals.quota} />
           </div>
-
-          <div className="chart-grid">
+          <div className="mb-6 grid gap-3 lg:grid-cols-2">
             <BarChart
               title="请求次数（按日）"
               values={usage.series.map((s) => s.requests)}
@@ -212,75 +216,100 @@ export function LogsPage() {
               title="消耗额度（按日）"
               values={usage.series.map((s) => s.quota)}
               labels={usage.series.map((s) => s.day)}
-              color="#0d9488"
+              color="var(--chart-2)"
             />
             <ModelBars rows={usage.by_model} />
           </div>
         </>
-      )}
+      ) : loading ? (
+        <p className="mb-4 text-sm text-muted-foreground">加载中...</p>
+      ) : null}
 
-      <h2>逐笔记录</h2>
-      <p className="hint">
-        逐笔记录保留最近 {usage?.retention_days ?? '—'} 天，更早的只在上方图表中。时间均为 UTC。
+      <h2 className="mb-1 text-base font-semibold">逐笔记录</h2>
+      <p className="mb-3 text-xs text-muted-foreground">
+        逐笔记录保留最近 {usage?.retention_days ?? '—'} 天，更早的只在上方图表中。
       </p>
-      <table>
-        <thead>
-          <tr>
-            <th>时间</th>
-            <th>用户</th>
-            <th>渠道</th>
-            <th>模型</th>
-            <th>输入</th>
-            <th>缓存读 / 写</th>
-            <th>输出（推理）</th>
-            <th>用量格式</th>
-            <th>额度</th>
-            <th>耗时</th>
-            <th>状态</th>
-          </tr>
-        </thead>
-        <tbody>
-          {logs.length === 0 ? (
-            <tr>
-              <td colSpan={11} className="muted">
-                所选范围内没有逐笔记录
-              </td>
-            </tr>
-          ) : (
-            logs.map((l) => (
-              <tr key={l.id}>
-                <td>{l.created_at}</td>
-                <td>{l.user_id}</td>
-                <td>{l.channel_id ?? '-'}</td>
-                <td>{l.model}</td>
-                <td>{l.prompt_tokens}</td>
-                <td>
-                  {l.cache_read_tokens} / {l.cache_write_tokens}
-                </td>
-                <td>
-                  {l.completion_tokens}
-                  {l.reasoning_tokens > 0 ? `（${l.reasoning_tokens}）` : ''}
-                </td>
-                <td className="mono">{l.usage_adapter || '-'}</td>
-                <td>{l.quota}</td>
-                <td>{l.duration_ms}ms</td>
-                <td className={`status-${l.status}`} title={l.error ?? l.raw_usage ?? ''}>
-                  {statusLabel(l.status)}
-                </td>
-              </tr>
-            ))
-          )}
-        </tbody>
-      </table>
-      <div className="pager">
-        <button type="button" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>
-          上一页
-        </button>
-        <span>第 {offset / PAGE_SIZE + 1} 页</span>
-        <button type="button" disabled={logs.length < PAGE_SIZE} onClick={() => setOffset(offset + PAGE_SIZE)}>
-          下一页
-        </button>
-      </div>
+      <DataTable>
+        <table className="w-full caption-bottom text-sm">
+          <TableHeader>
+            <TableRow>
+              <TableHead>时间</TableHead>
+              <TableHead>用户</TableHead>
+              <TableHead>渠道</TableHead>
+              <TableHead>模型</TableHead>
+              <TableHead className="text-right">输入</TableHead>
+              <TableHead className="text-right">缓存读 / 写</TableHead>
+              <TableHead className="text-right">输出（推理）</TableHead>
+              <TableHead>用量格式</TableHead>
+              <TableHead className="text-right">额度</TableHead>
+              <TableHead className="text-right">耗时</TableHead>
+              <TableHead>状态</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {loading && logs.length === 0 ? (
+              <SkeletonRows cols={11} />
+            ) : logs.length === 0 ? (
+              <EmptyRow colSpan={11}>所选范围内没有逐笔记录</EmptyRow>
+            ) : (
+              logs.map((l) => (
+                <TableRow key={l.id}>
+                  <TableCell className="font-mono text-xs">{l.created_at}</TableCell>
+                  <TableCell className="tabular-nums">{l.user_id}</TableCell>
+                  <TableCell className="tabular-nums">{l.channel_id ?? '-'}</TableCell>
+                  <TableCell>{l.model}</TableCell>
+                  <TableCell className="text-right tabular-nums">{fmtNum(l.prompt_tokens)}</TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {fmtNum(l.cache_read_tokens)} / {fmtNum(l.cache_write_tokens)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {fmtNum(l.completion_tokens)}
+                    {l.reasoning_tokens > 0 ? `（${fmtNum(l.reasoning_tokens)}）` : ''}
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">{l.usage_adapter || '-'}</TableCell>
+                  <TableCell className="text-right tabular-nums">{fmtNum(l.quota)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{l.duration_ms}ms</TableCell>
+                  <TableCell>
+                    <span title={l.error ?? l.raw_usage ?? ''}>
+                      <StatusBadge status={l.status} />
+                    </span>
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </table>
+      </DataTable>
+      <Pager
+        page={offset / PAGE_SIZE + 1}
+        hasPrev={offset > 0}
+        hasNext={logs.length >= PAGE_SIZE}
+        onPrev={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
+        onNext={() => setOffset(offset + PAGE_SIZE)}
+      />
     </div>
+  )
+}
+
+function PresetButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean
+  onClick: () => void
+  children: string
+}) {
+  return (
+    <button
+      type="button"
+      className={cn(
+        'rounded-md px-3 text-sm text-muted-foreground',
+        active && 'bg-background font-medium text-foreground shadow-sm',
+      )}
+      onClick={onClick}
+    >
+      {children}
+    </button>
   )
 }

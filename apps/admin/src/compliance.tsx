@@ -5,9 +5,14 @@ export const complianceUrl =
 
 export function ComplianceAuthNotice() {
   return (
-    <p className="legal-notice muted">
+    <p className="text-xs leading-relaxed text-muted-foreground">
       本实例由部署方独立运营。须使用合法授权的上游凭据，不得用于规避上游协议的中转或转售。详见{' '}
-      <a href={complianceUrl} target="_blank" rel="noopener noreferrer">
+      <a
+        className="underline underline-offset-2 hover:text-foreground"
+        href={complianceUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+      >
         合规与可接受使用说明
       </a>
       。
@@ -18,7 +23,7 @@ export function ComplianceAuthNotice() {
 export function ComplianceFooterLink() {
   return (
     <a
-      className="legal-link"
+      className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
       href={complianceUrl}
       target="_blank"
       rel="noopener noreferrer"
